@@ -342,25 +342,25 @@ tasks:
                 args:
                   - |
                     set -e
-                    apk add --no-cache python3 py3-pip cargo curl 2>/dev/null
+                    apk add --no-cache python3 py3-pip curl 2>/dev/null
 
                     PROXY="{{.proxy_url}}"
 
-                    echo "=== Seeding pip packages ==="
-                    pip download \
-                      --index-url "${PROXY}/pypi/simple/" \
-                      --no-deps \
-                      --dest /tmp/pip-cache \
-                      -r /deps/pip.txt || true
+                    echo "=== Seeding pip packages (simple index) ==="
+                    while IFS= read -r line; do
+                      pkg=\$(echo "\${line}" | sed 's/==.*//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+                      [ -z "\${pkg}" ] && continue
+                      curl -sf "\${PROXY}/pypi/simple/\${pkg}/" -o /dev/null && \
+                        echo "  warmed: \${pkg}" || \
+                        echo "  miss:   \${pkg}"
+                    done < /deps/pip.txt
 
                     echo "=== Seeding cargo crates ==="
-                    mkdir -p /tmp/cargo-home
-                    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
-                    CARGO_HOME=/tmp/cargo-home \
-                    cargo fetch \
-                      --manifest-path /dev/null 2>/dev/null || \
                     while IFS='@' read -r name ver; do
-                      curl -sf "${PROXY}/cargo/crates/${name}/${name}-${ver}.crate" -o /dev/null || true
+                      [ -z "\${name}" ] && continue
+                      curl -sf "\${PROXY}/cargo/crates/\${name}/\${name}-\${ver}.crate" -o /dev/null && \
+                        echo "  warmed: \${name}@\${ver}" || \
+                        echo "  miss:   \${name}@\${ver}"
                     done < /deps/cargo.txt
 
                     echo "Done."
@@ -396,6 +396,8 @@ tasks:
         LOCAL_PORT="{{.local_port}}"
         BASE="http://localhost:${LOCAL_PORT}"
 
+        lsof -ti tcp:"${LOCAL_PORT}" | xargs kill -9 2>/dev/null || true
+        sleep 1
         kubectl port-forward svc/nginx-proxy "${LOCAL_PORT}:8080" -n "{{.namespace}}" >/dev/null 2>&1 &
         PF_PID=$!
         sleep 3
@@ -406,7 +408,7 @@ tasks:
         if [ -s "{{.output_dir}}/pip.txt" ]; then
           echo ""
           echo "[pip] Checking 5 random packages..."
-          shuf -n 5 "{{.output_dir}}/pip.txt" | while IFS='==' read -r pkg ver _; do
+          cat "{{.output_dir}}/pip.txt" | while IFS='==' read -r pkg ver _; do
             pkg_lower=$(echo "$pkg" | tr '[:upper:]' '[:lower:]' | tr _ -)
             STATUS=$(curl -sf "${BASE}/pypi/simple/${pkg_lower}/" -D /tmp/cache-hdr.txt -o /dev/null 2>/dev/null && \
               grep -i "X-Cache-Status" /tmp/cache-hdr.txt | awk '{print $2}' | tr -d '\r\n' || echo "error")
@@ -422,7 +424,7 @@ tasks:
         if [ -s "{{.output_dir}}/cargo.txt" ]; then
           echo ""
           echo "[cargo] Checking 5 random crates..."
-          shuf -n 5 "{{.output_dir}}/cargo.txt" | while IFS='@' read -r name ver; do
+          cat "{{.output_dir}}/cargo.txt" | while IFS='@' read -r name ver; do
             STATUS=$(curl -sf "${BASE}/cargo/crates/${name}/${name}-${ver}.crate" -D /tmp/cache-hdr.txt -o /dev/null 2>/dev/null && \
               grep -i "X-Cache-Status" /tmp/cache-hdr.txt | awk '{print $2}' | tr -d '\r\n' || echo "error")
             if [ "${STATUS}" = "HIT" ]; then

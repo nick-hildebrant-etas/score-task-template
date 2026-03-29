@@ -23,6 +23,8 @@ tasks:
         vars: { label: "F-04 · OCI registry", t: "registry:test" }
       - task: _run
         vars: { label: "F-05 · Dep list generation", t: "deps:test-collect" }
+      - task: _run
+        vars: { label: "F-06 · Cache warming", t: "deps:test-seed" }
       - |
         echo ""
         echo "All smoke tests passed."
