@@ -1,7 +1,7 @@
 version: "3"
 
 dotenv:
-  - "~/.score-task/.env"
+  - ".env"
 
 includes:
   secrets:

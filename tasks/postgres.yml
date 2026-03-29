@@ -23,10 +23,11 @@ tasks:
         helm repo update bitnami
       - |
         echo "Installing PostgreSQL (release: {{.release_name}}, namespace: {{.namespace}})..."
+        CHART_VERSION="{{.chart_version}}"
         helm upgrade --install "{{.release_name}}" "{{.chart}}" \
           --namespace "{{.namespace}}" \
           --create-namespace \
-          {{if .chart_version}}--version "{{.chart_version}}" \{{end}}
+          ${CHART_VERSION:+--version "$CHART_VERSION"} \
           --set auth.postgresPassword="${POSTGRES_PASSWORD}" \
           --set auth.database=platform \
           --set primary.persistence.size="{{.pvc_size}}" \
@@ -69,14 +70,160 @@ tasks:
         kubectl delete pvc --all -n "{{.namespace}}" --ignore-not-found=true
 
   test:
-    desc: "Smoke test: connect to PostgreSQL and run a query"
+    desc: "Acceptance test: psql ping from in-cluster Job; data persists across pod restart"
     vars:
       release_name: '{{.release_name | default "postgres"}}'
       namespace: '{{.namespace | default "postgres"}}'
+      timeout: '{{.timeout | default "120s"}}'
     env:
       KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:
       - |
-        echo "TODO: implement — connect to postgres and run SELECT 1"
-        echo "postgres:test is a stub"
-        # TODO: kubectl exec into postgres pod and run psql -c "SELECT 1"
+        FAILED=0
+        PG_HOST="{{.release_name}}-postgresql.{{.namespace}}.svc.cluster.local"
+        PG_SECRET="{{.release_name}}-postgresql"
+        NS="{{.namespace}}"
+        SUFFIX="$$"
+
+        echo "=== PostgreSQL acceptance tests ==="
+        echo ""
+
+        # T1: psql ping via in-cluster Job
+        echo "[T1] psql ping (SELECT 1) via in-cluster Job..."
+        JOB1="pg-ping-${SUFFIX}"
+        kubectl apply -f - <<EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${JOB1}
+          namespace: ${NS}
+        spec:
+          ttlSecondsAfterFinished: 60
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: psql
+                image: postgres:15-alpine
+                env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${PG_SECRET}
+                      key: postgres-password
+                command: ["psql", "-h", "${PG_HOST}", "-U", "postgres", "-d", "platform", "-c", "SELECT 1"]
+        EOF
+        if kubectl wait job/${JOB1} -n ${NS} --for=condition=Complete --timeout={{.timeout}} >/dev/null 2>&1; then
+          echo "  [PASS] psql ping succeeded"
+        else
+          echo "  [FAIL] psql ping job did not complete"
+          kubectl logs -l job-name=${JOB1} -n ${NS} 2>/dev/null || true
+          FAILED=1
+        fi
+        kubectl delete job/${JOB1} -n ${NS} --ignore-not-found=true >/dev/null 2>&1
+
+        # T2: Data persists across pod restart
+        echo ""
+        echo "[T2] Data persistence across pod restart..."
+
+        JOB2="pg-write-${SUFFIX}"
+        kubectl apply -f - <<EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${JOB2}
+          namespace: ${NS}
+        spec:
+          ttlSecondsAfterFinished: 60
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: psql
+                image: postgres:15-alpine
+                env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${PG_SECRET}
+                      key: postgres-password
+                command:
+                - psql
+                - "-h"
+                - "${PG_HOST}"
+                - "-U"
+                - postgres
+                - "-d"
+                - platform
+                - "-c"
+                - "CREATE TABLE IF NOT EXISTS persistence_test (id SERIAL PRIMARY KEY, marker TEXT); INSERT INTO persistence_test (marker) VALUES ('f03-test');"
+        EOF
+        if kubectl wait job/${JOB2} -n ${NS} --for=condition=Complete --timeout={{.timeout}} >/dev/null 2>&1; then
+          echo "  Write job succeeded"
+        else
+          echo "  [FAIL] Write job did not complete"
+          kubectl logs -l job-name=${JOB2} -n ${NS} 2>/dev/null || true
+          FAILED=1
+        fi
+        kubectl delete job/${JOB2} -n ${NS} --ignore-not-found=true >/dev/null 2>&1
+
+        echo "  Restarting PostgreSQL pod..."
+        kubectl delete pod -l app.kubernetes.io/name=postgresql -n ${NS} --wait=false
+        sleep 2
+        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=postgresql -n ${NS} --timeout={{.timeout}}
+
+        JOB3="pg-verify-${SUFFIX}"
+        kubectl apply -f - <<EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${JOB3}
+          namespace: ${NS}
+        spec:
+          ttlSecondsAfterFinished: 60
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: psql
+                image: postgres:15-alpine
+                env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${PG_SECRET}
+                      key: postgres-password
+                command:
+                - psql
+                - "-h"
+                - "${PG_HOST}"
+                - "-U"
+                - postgres
+                - "-d"
+                - platform
+                - "-t"
+                - "-c"
+                - "SELECT COUNT(*) FROM persistence_test WHERE marker = 'f03-test';"
+        EOF
+        if kubectl wait job/${JOB3} -n ${NS} --for=condition=Complete --timeout={{.timeout}} >/dev/null 2>&1; then
+          COUNT=$(kubectl logs -l job-name=${JOB3} -n ${NS} 2>/dev/null | tr -d ' \n' || echo "0")
+          if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
+            echo "  [PASS] Data persisted after pod restart (count: ${COUNT})"
+          else
+            echo "  [FAIL] Data not found after pod restart (count: ${COUNT})"
+            FAILED=1
+          fi
+        else
+          echo "  [FAIL] Verify job did not complete"
+          kubectl logs -l job-name=${JOB3} -n ${NS} 2>/dev/null || true
+          FAILED=1
+        fi
+        kubectl delete job/${JOB3} -n ${NS} --ignore-not-found=true >/dev/null 2>&1
+
+        echo ""
+        if [ "$FAILED" -eq 0 ]; then
+          echo "All PostgreSQL tests passed."
+        else
+          echo "Some PostgreSQL tests failed."
+          exit 1
+        fi

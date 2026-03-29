@@ -107,7 +107,7 @@ Features are in delivery order. Each block shows the tasks introduced and the ac
 
 ---
 
-#### F-00 · Claude Code install · 5 pts
+#### ~~F-00 · Claude Code install · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task tools:install-npm`
@@ -123,7 +123,7 @@ Features are in delivery order. Each block shows the tasks introduced and the ac
 
 ---
 
-#### F-01 · K3s install & verify · 5 pts
+#### ~~F-01 · K3s install & verify · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task k3s:install`
@@ -136,7 +136,7 @@ Features are in delivery order. Each block shows the tasks introduced and the ac
 
 ---
 
-#### F-02 · Namespaces & storage · 5 pts
+#### ~~F-02 · Namespaces & storage · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task storage:setup`
@@ -148,7 +148,7 @@ Features are in delivery order. Each block shows the tasks introduced and the ac
 
 ---
 
-#### F-03 · PostgreSQL deploy · 5 pts
+#### ~~F-03 · PostgreSQL deploy · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task postgres:install`

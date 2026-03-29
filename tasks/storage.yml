@@ -29,7 +29,7 @@ tasks:
           echo "TODO: implement — local-path-provisioner status check"
 
   test:
-    desc: "Deploy a test PVC in each namespace and verify it binds"
+    desc: "Acceptance test: all 5 namespaces exist; PVC binds via local-path in each"
     vars:
       namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
       test_timeout: '{{.test_timeout | default "60s"}}'
@@ -37,15 +37,87 @@ tasks:
       KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:
       - |
-        echo "TODO: implement — deploy test PVC in each namespace and verify binding"
         FAILED=0
-        for ns in {{.namespaces}}; do
-          echo "Testing PVC binding in namespace: $ns"
-          # TODO: create test PVC, wait for bound, then delete
-          echo "  [SKIP] $ns — not yet implemented"
-        done
+        echo "=== Storage acceptance tests ==="
         echo ""
-        echo "storage:test is a stub — implement PVC binding tests"
+
+        # Test 1: All 5 namespaces exist
+        echo "[T1] All required namespaces exist..."
+        for ns in {{.namespaces}}; do
+          if kubectl get namespace "$ns" >/dev/null 2>&1; then
+            echo "  [PASS] $ns"
+          else
+            echo "  [FAIL] $ns missing"
+            FAILED=1
+          fi
+        done
+
+        # Test 2: local-path StorageClass exists
+        echo ""
+        echo "[T2] local-path StorageClass exists..."
+        if kubectl get storageclass local-path >/dev/null 2>&1; then
+          echo "  [PASS] StorageClass/local-path exists"
+        else
+          echo "  [FAIL] StorageClass/local-path not found"
+          FAILED=1
+        fi
+
+        # Test 3: PVC binds in each namespace (pod required for WaitForFirstConsumer)
+        echo ""
+        echo "[T3] PVC binds via local-path-provisioner in each namespace..."
+        for ns in {{.namespaces}}; do
+          NAME="storage-test-$$"
+          kubectl apply -f - >/dev/null <<EOF
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${NAME}
+          namespace: ${ns}
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 1Mi
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ${NAME}
+          namespace: ${ns}
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: test
+            image: busybox
+            command: ["sh", "-c", "echo ok > /data/ok"]
+            volumeMounts:
+            - name: data
+              mountPath: /data
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: ${NAME}
+        EOF
+          if kubectl wait pod/${NAME} -n ${ns} --for=jsonpath='{.status.phase}'=Succeeded --timeout={{.test_timeout}} >/dev/null 2>&1; then
+            PHASE=$(kubectl get pvc/${NAME} -n ${ns} -o jsonpath='{.status.phase}' 2>/dev/null)
+            echo "  [PASS] $ns — PVC phase: ${PHASE}"
+          else
+            echo "  [FAIL] $ns — pod did not complete within {{.test_timeout}}"
+            kubectl get pod/${NAME} -n ${ns} 2>/dev/null || true
+            FAILED=1
+          fi
+          kubectl delete pod/${NAME} pvc/${NAME} -n ${ns} --ignore-not-found=true >/dev/null 2>&1 &
+        done
+        wait
+
+        echo ""
+        if [ "$FAILED" -eq 0 ]; then
+          echo "All storage tests passed."
+        else
+          echo "Some storage tests failed."
+          exit 1
+        fi
 
   teardown:
     desc: "Delete platform namespaces"

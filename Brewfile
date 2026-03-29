@@ -6,4 +6,4 @@ brew "age"
 brew "sops"
 brew "yq"
 brew "jq"
-brew "grpc-health-probe"
+# grpc-health-probe: not a Homebrew formula — install via: go install github.com/grpc-ecosystem/grpc-health-probe@latest
