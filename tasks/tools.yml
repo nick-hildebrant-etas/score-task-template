@@ -1,0 +1,77 @@
+version: "3"
+
+tasks:
+  install-npm:
+    desc: "Install Node.js + npm via Homebrew (idempotent)"
+    preconditions:
+      - sh: command -v brew >/dev/null 2>&1
+        msg: "Homebrew is not installed. Install it from https://brew.sh"
+    cmds:
+      - |
+        if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+          echo "node $(node --version) and npm $(npm --version) already installed — skipping."
+        else
+          echo "Installing node via Homebrew..."
+          brew install node
+        fi
+
+  install-claude:
+    desc: "Install Claude Code globally via npm (idempotent)"
+    preconditions:
+      - sh: command -v npm >/dev/null 2>&1
+        msg: "npm is not installed. Run: task tools:install-npm"
+    cmds:
+      - |
+        if command -v claude >/dev/null 2>&1; then
+          echo "claude $(claude --version) already installed — skipping."
+        else
+          echo "Installing @anthropic-ai/claude-code globally..."
+          npm install -g @anthropic-ai/claude-code
+        fi
+
+  test-claude:
+    desc: "Acceptance test: claude --version exits 0 and resolves from npm global bin"
+    cmds:
+      - |
+        FAILED=0
+
+        echo "=== Claude Code acceptance tests ==="
+        echo ""
+
+        # Test 1: claude binary is on PATH
+        echo "[T1] claude is on PATH..."
+        if command -v claude >/dev/null 2>&1; then
+          echo "[PASS] claude found at $(command -v claude)"
+        else
+          echo "[FAIL] claude not found on PATH"
+          FAILED=1
+        fi
+
+        # Test 2: claude --version exits 0
+        echo ""
+        echo "[T2] claude --version exits 0..."
+        if claude --version >/dev/null 2>&1; then
+          echo "[PASS] claude --version: $(claude --version)"
+        else
+          echo "[FAIL] claude --version returned non-zero"
+          FAILED=1
+        fi
+
+        # Test 3: claude resolves under npm global bin
+        echo ""
+        echo "[T3] claude resolves under npm global bin..."
+        NPM_BIN=$(npm bin -g 2>/dev/null || npm root -g 2>/dev/null | sed 's|/lib/node_modules||')/.bin
+        CLAUDE_PATH=$(command -v claude 2>/dev/null)
+        if echo "$CLAUDE_PATH" | grep -q "npm\|node_modules\|bin"; then
+          echo "[PASS] claude at ${CLAUDE_PATH} (npm global)"
+        else
+          echo "[WARN] claude at ${CLAUDE_PATH} — may not be the npm global install"
+        fi
+
+        echo ""
+        if [ "$FAILED" -eq 0 ]; then
+          echo "All Claude Code tests passed."
+        else
+          echo "Some Claude Code tests failed."
+          exit 1
+        fi

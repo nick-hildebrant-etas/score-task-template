@@ -88,7 +88,7 @@ SOPS_AGE_KEY_FILE        # path to age private key
 
 | Milestone | Features | Deliverable |
 |---|---|---|
-| M1 — Foundation | F-01 F-02 F-03 | K3s running, namespaces ready, Postgres healthy |
+| M1 — Foundation | F-00 F-01 F-02 F-03 | Claude Code installed, K3s running, namespaces ready, Postgres healthy |
 | M2 — Artifact store | F-04 F-05 | Nexus up, all proxy repos configured, Docker registry live |
 | M3 — Dep warming | F-06 F-07 | Central dep list generated, Nexus caches warm for all ecosystems |
 | M4 — Build execution | F-08 F-09 F-10 | Worker image in Nexus, Buildbarn RBE accepting Bazel actions |
@@ -104,6 +104,22 @@ Features are in delivery order. Each block shows the tasks introduced and the ac
 ---
 
 ### Milestone 1 — Foundation
+
+---
+
+#### F-00 · Claude Code install · 5 pts
+
+**Tasks introduced**
+- `task tools:install-npm`
+- `task tools:install-claude`
+
+**Acceptance tests**
+- `task tools:test-claude` — `claude --version` exits `0`
+- `which claude` returns a path under the npm global bin directory
+
+**Notes**
+
+`tools:install-npm` installs Node.js + npm via Homebrew (`brew install node`). `tools:install-claude` runs `npm install -g @anthropic-ai/claude-code`. Both are idempotent — re-running on an already-configured host is a no-op.
 
 ---
 
@@ -320,6 +336,8 @@ Base image is `arm64v8/alpine:3.19` with `bash curl git openjdk21-jre python3 py
 `task up` runs this sequence. Each step waits for the previous to reach healthy before continuing.
 
 ```
+ 0  task tools:install-npm
+ 0  task tools:install-claude            (needs: tools:install-npm)
  1  task k3s:install
  2  task storage:setup                   (needs: k3s:install)
  3  task postgres:install                (needs: storage:setup)

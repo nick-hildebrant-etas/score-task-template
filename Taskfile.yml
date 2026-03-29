@@ -7,6 +7,9 @@ includes:
   secrets:
     taskfile: "{{.HOME}}/.score-task/secrets.yml"
     optional: true
+  tools:
+    taskfile: "{{.HOME}}/.score-task/tasks/tools.yml"
+    optional: true
   k3s:
     taskfile: "{{.HOME}}/.score-task/tasks/k3s.yml"
     optional: true
@@ -104,6 +107,8 @@ tasks:
   up:
     desc: "Bring up the full ARM build platform in order"
     cmds:
+      - task: tools:install-npm
+      - task: tools:install-claude
       - task: k3s:install
       - task: storage:setup
       - task: postgres:install
