@@ -198,7 +198,7 @@ PVC (local-path, 20Gi) holds the nginx cache. No auth, no user management, no da
 
 ---
 
-#### F-05 · Central dep list generation · 5 pts
+#### ~~F-05 · Central dep list generation · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task deps:collect`

@@ -1,0 +1,9 @@
+# deps/repos.txt — one git URL per line
+# Copy to repos.txt and fill in your 30 repos.
+# Lines starting with # are ignored.
+#
+# task deps:collect will clone each repo (depth=1) into deps/repos/
+# and re-pull on subsequent runs.
+#
+# https://github.com/your-org/repo-one
+# https://github.com/your-org/repo-two

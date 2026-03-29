@@ -2,16 +2,47 @@ version: "3"
 
 tasks:
   smoke:
-    desc: "Run all platform smoke tests in sequence"
+    desc: "Run all completed milestone acceptance tests in order"
     env:
       KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:
-      - task: k3s:test
       - |
-        echo "TODO: implement — run smoke tests for storage, postgres, nexus, buildbarn, actions"
+        echo "========================================"
+        echo " ARM build platform — smoke test suite"
+        echo "========================================"
         echo ""
-        echo "Full smoke test suite (test:smoke) is a stub"
-        echo "Currently only k3s:test is wired up."
+      - task: _run
+        vars: { label: "F-00 · Claude Code install", t: "tools:test-claude" }
+      - task: _run
+        vars: { label: "F-01 · K3s node ready", t: "k3s:test" }
+      - task: _run
+        vars: { label: "F-02 · Namespaces & storage", t: "storage:test" }
+      - task: _run
+        vars: { label: "F-03 · nginx proxy (PyPI/Cargo/BCR)", t: "proxy:test" }
+      - task: _run
+        vars: { label: "F-04 · OCI registry", t: "registry:test" }
+      - task: _run
+        vars: { label: "F-05 · Dep list generation", t: "deps:test-collect" }
+      - |
+        echo ""
+        echo "All smoke tests passed."
+
+  _run:
+    internal: true
+    vars:
+      label: '{{.label}}'
+      t: '{{.t}}'
+    cmds:
+      - |
+        echo "--- {{.label}} ---"
+        if task {{.t}} >/tmp/smoke-out 2>&1; then
+          echo "[PASS] {{.label}}"
+        else
+          echo "[FAIL] {{.label}}"
+          cat /tmp/smoke-out
+          exit 1
+        fi
+        echo ""
 
   matrix-smoke:
     desc: "Run smoke tests across multiple build configurations"

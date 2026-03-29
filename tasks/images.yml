@@ -53,12 +53,11 @@ tasks:
       - |
         REGISTRY="{{.registry_host}}:${REGISTRY_PORT}"
         REMOTE_IMAGE="${REGISTRY}/{{.image_name}}:{{.image_tag}}"
+        LOCAL_REF="{{.image_name}}:{{.image_tag}}"
 
-        echo "Pushing {{.image_name}}:{{.image_tag}} to registry:2 at ${REGISTRY}..."
-        limactl shell "{{.vm_name}}" -- bash -c "
-          sudo nerdctl tag '{{.image_name}}:{{.image_tag}}' '${REMOTE_IMAGE}' &&
-          sudo nerdctl push --insecure-registry '${REMOTE_IMAGE}'
-        "
+        echo "Pushing ${LOCAL_REF} to registry:2 at ${REGISTRY}..."
+        limactl shell "{{.vm_name}}" -- sudo k3s ctr images tag "${LOCAL_REF}" "${REMOTE_IMAGE}"
+        limactl shell "{{.vm_name}}" -- sudo k3s ctr images push --plain-http "${REMOTE_IMAGE}"
         echo "Image pushed: ${REMOTE_IMAGE}"
 
   list:
@@ -99,7 +98,7 @@ tasks:
         echo ""
 
         echo "[T1] Pull worker image from registry:2..."
-        if limactl shell "{{.vm_name}}" -- sudo nerdctl pull --insecure-registry "${IMAGE}" >/dev/null 2>&1; then
+        if limactl shell "{{.vm_name}}" -- sudo k3s ctr images pull --plain-http "${IMAGE}" >/dev/null 2>&1; then
           echo "  [PASS] Pull succeeded: ${IMAGE}"
         else
           echo "  [FAIL] Could not pull ${IMAGE}"
@@ -107,7 +106,7 @@ tasks:
         fi
 
         echo "[T2] uname -m returns aarch64..."
-        ARCH=$(limactl shell "{{.vm_name}}" -- sudo nerdctl run --rm --insecure-registry "${IMAGE}" uname -m 2>/dev/null || echo "error")
+        ARCH=$(limactl shell "{{.vm_name}}" -- sudo k3s ctr run --rm "${IMAGE}" test-arch uname -m 2>/dev/null || echo "error")
         if [ "${ARCH}" = "aarch64" ]; then
           echo "  [PASS] uname -m: ${ARCH}"
         else

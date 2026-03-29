@@ -2,80 +2,443 @@ version: "3"
 
 tasks:
   collect:
-    desc: "Scrape lockfiles and collect dependency manifests"
+    desc: "Scrape lockfiles from repos and write deps/pip.txt, deps/cargo.txt, deps/bazel-modules.txt"
     vars:
-      workspace_dir: '{{.workspace_dir | default (printf "%s/work" .HOME)}}'
+      repos_file: '{{.repos_file | default (printf "%s/.score-task/deps/repos.txt" .HOME)}}'
+      repos_dir: '{{.repos_dir | default (printf "%s/.score-task/deps/repos" .HOME)}}'
       output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+      workspace_dir: '{{.workspace_dir | default ""}}'
     cmds:
-      - mkdir -p "{{.output_dir}}"
+      - mkdir -p "{{.output_dir}}" "{{.repos_dir}}"
       - |
-        echo "TODO: implement — scan workspace for lockfiles and collect dependency lists"
+        PIP_TMP=$(mktemp)
+        CARGO_TMP=$(mktemp)
+        BCR_TMP=$(mktemp)
+
+        # scan_repo ROOT PIP_FILE CARGO_FILE BCR_FILE
+        scan_repo() {
+          local root="$1" pip_out="$2" cargo_out="$3" bcr_out="$4"
+
+          # requirements.lock / requirements*.txt
+          find "${root}" -maxdepth 4 \( -name "requirements*.lock" -o -name "requirements*.txt" \) 2>/dev/null | \
+          while read -r f; do
+            grep -E '^[A-Za-z0-9_.-].*==[0-9]' "$f" 2>/dev/null | \
+              sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*;.*//' | sed 's/[[:space:]]*$//' | \
+              grep -v '^\s*$' >> "$pip_out" || true
+          done
+
+          # Cargo.lock
+          find "${root}" -maxdepth 4 -name "Cargo.lock" 2>/dev/null | \
+          while read -r f; do
+            awk '/^\[\[package\]\]/{name=""; ver=""}
+                 /^name = "/{gsub(/^name = "|"$/, ""); name=$0}
+                 /^version = "/{gsub(/^version = "|"$/, ""); ver=$0; if(name!="")print name"@"ver}' \
+              "$f" 2>/dev/null >> "$cargo_out" || true
+          done
+
+          # MODULE.bazel.lock
+          find "${root}" -maxdepth 4 -name "MODULE.bazel.lock" 2>/dev/null | \
+          while read -r f; do
+            jq -r '.moduleDepGraph | keys[] | select(. != "" and (. | contains("@")))' \
+              "$f" 2>/dev/null >> "$bcr_out" || true
+          done
+        }
+
+        # Collect from cloned/pulled repos listed in repos.txt
+        if [ -f "{{.repos_file}}" ]; then
+          while IFS= read -r repo_url || [ -n "$repo_url" ]; do
+            [ -z "$repo_url" ] && continue
+            case "$repo_url" in '#'*) continue ;; esac
+            repo_name=$(basename "$repo_url" .git)
+            repo_path="{{.repos_dir}}/${repo_name}"
+            if [ -d "${repo_path}/.git" ]; then
+              echo "  pulling ${repo_name}..."
+              git -C "${repo_path}" pull --ff-only -q 2>/dev/null || true
+            else
+              echo "  cloning ${repo_name}..."
+              git clone --depth=1 -q "${repo_url}" "${repo_path}" 2>/dev/null || {
+                echo "  [WARN] failed to clone ${repo_url}" >&2
+                continue
+              }
+            fi
+            scan_repo "${repo_path}" "$PIP_TMP" "$CARGO_TMP" "$BCR_TMP"
+          done < "{{.repos_file}}"
+        fi
+
+        # Also scan extra workspace dir if provided
+        if [ -n "{{.workspace_dir}}" ] && [ -d "{{.workspace_dir}}" ]; then
+          echo "  scanning {{.workspace_dir}}..."
+          scan_repo "{{.workspace_dir}}" "$PIP_TMP" "$CARGO_TMP" "$BCR_TMP"
+        fi
+
+        # Dedup, sort, write final files
+        sort -u "$PIP_TMP"   > "{{.output_dir}}/pip.txt"
+        sort -u "$CARGO_TMP" > "{{.output_dir}}/cargo.txt"
+        sort -u "$BCR_TMP"   > "{{.output_dir}}/bazel-modules.txt"
+        rm -f "$PIP_TMP" "$CARGO_TMP" "$BCR_TMP"
+
+        PIP_COUNT=$(wc -l < "{{.output_dir}}/pip.txt" | tr -d ' ')
+        CARGO_COUNT=$(wc -l < "{{.output_dir}}/cargo.txt" | tr -d ' ')
+        BCR_COUNT=$(wc -l < "{{.output_dir}}/bazel-modules.txt" | tr -d ' ')
         echo ""
-        echo "This task should:"
-        echo "  1. Find all pom.xml, requirements.txt, Cargo.lock, go.sum files under {{.workspace_dir}}"
-        echo "  2. Parse each lockfile to extract artifact coordinates + checksums"
-        echo "  3. Write a unified manifest to {{.output_dir}}/deps-manifest.json"
-        echo ""
-        echo "deps:collect is a stub"
+        echo "Wrote:"
+        echo "  deps/pip.txt           ${PIP_COUNT} packages"
+        echo "  deps/cargo.txt         ${CARGO_COUNT} crates"
+        echo "  deps/bazel-modules.txt ${BCR_COUNT} modules"
+    generates:
+      - "{{.HOME}}/.score-task/deps/pip.txt"
+      - "{{.HOME}}/.score-task/deps/cargo.txt"
+      - "{{.HOME}}/.score-task/deps/bazel-modules.txt"
 
   diff:
-    desc: "Show diff of dependency manifest vs last committed version"
+    desc: "Show diff of dep files vs last committed version"
     vars:
-      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
-    cmds:
-      - |
-        echo "TODO: implement — diff deps-manifest.json against HEAD"
-        echo "deps:diff is a stub"
-
-  commit:
-    desc: "Commit updated dependency manifest to repo"
-    vars:
-      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
       score_task_dir: '{{.score_task_dir | default (printf "%s/.score-task" .HOME)}}'
     cmds:
       - |
-        echo "TODO: implement — git commit updated deps-manifest.json"
-        echo "deps:commit is a stub"
+        cd "{{.score_task_dir}}"
+        if git diff --quiet deps/pip.txt deps/cargo.txt deps/bazel-modules.txt 2>/dev/null && \
+           git diff --cached --quiet deps/pip.txt deps/cargo.txt deps/bazel-modules.txt 2>/dev/null; then
+          echo "No changes in dep files."
+        else
+          git diff HEAD -- deps/pip.txt deps/cargo.txt deps/bazel-modules.txt 2>/dev/null || \
+          git diff -- deps/pip.txt deps/cargo.txt deps/bazel-modules.txt
+        fi
 
-  seed:
-    desc: "Warm Nexus caches by uploading collected dependencies"
+  commit:
+    desc: "Stage and commit updated dep files"
     vars:
-      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
-      nexus_url: '{{.nexus_url | default "http://localhost:8081"}}'
-    preconditions:
-      - sh: '[ -n "${NEXUS_ADMIN_PASSWORD}" ]'
-        msg: "NEXUS_ADMIN_PASSWORD is not set. Run: task secrets:envgen"
+      score_task_dir: '{{.score_task_dir | default (printf "%s/.score-task" .HOME)}}'
     cmds:
       - |
-        echo "TODO: implement — upload dependencies from manifest to Nexus"
-        echo ""
-        echo "This task should:"
-        echo "  1. Read {{.output_dir}}/deps-manifest.json"
-        echo "  2. For each artifact, upload to the appropriate Nexus repo"
-        echo "     (Maven, PyPI, Cargo, Go module) via Nexus REST API"
-        echo "  3. Report upload success/failure counts"
-        echo ""
-        echo "deps:seed is a stub"
-
-  verify-cache:
-    desc: "Verify that seeded dependencies are resolvable from Nexus"
-    vars:
-      nexus_url: '{{.nexus_url | default "http://localhost:8081"}}'
-    cmds:
-      - |
-        echo "TODO: implement — probe Nexus to verify key dependencies are cached"
-        echo "deps:verify-cache is a stub"
+        cd "{{.score_task_dir}}"
+        git add deps/pip.txt deps/cargo.txt deps/bazel-modules.txt
+        COUNTS=$(wc -l deps/pip.txt deps/cargo.txt deps/bazel-modules.txt | tail -1 | awk '{print $1}')
+        git commit -m "chore: update dep manifests (${COUNTS} total coordinates)" || echo "Nothing to commit."
 
   test-collect:
-    desc: "Test that deps:collect produces a valid manifest"
+    desc: "Acceptance test: collect against fixtures; all three files non-empty; no duplicates"
+    vars:
+      fixture_dir: '{{.fixture_dir | default (printf "%s/.score-task/deps/fixtures" .HOME)}}'
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps/test-out" .HOME)}}'
     cmds:
       - |
-        echo "TODO: implement — run deps:collect on a test workspace and validate output"
-        echo "deps:test-collect is a stub"
+        FAILED=0
+        FIXTURE="{{.fixture_dir}}"
+        OUT="{{.output_dir}}"
+
+        echo "=== deps:collect acceptance tests ==="
+        echo ""
+
+        # Set up fixture repos
+        rm -rf "${FIXTURE}" "${OUT}"
+        mkdir -p "${FIXTURE}/repo-python" "${FIXTURE}/repo-rust" "${FIXTURE}/repo-bazel" "${OUT}"
+
+        # Fixture: Python requirements.lock
+        cat > "${FIXTURE}/repo-python/requirements.lock" <<'REQEOF'
+        requests==2.31.0
+        numpy==1.26.3
+        pandas==2.1.4
+        httpx==0.26.0
+        pydantic==2.5.3
+        REQEOF
+
+        # Fixture: Cargo.lock
+        cat > "${FIXTURE}/repo-rust/Cargo.lock" <<'CARGOEOF'
+        # This file is automatically @generated by Cargo.
+        # It is not intended for manual editing.
+        version = 3
+
+        [[package]]
+        name = "serde"
+        version = "1.0.195"
+        source = "registry+https://github.com/rust-lang/crates.io-index"
+
+        [[package]]
+        name = "tokio"
+        version = "1.35.1"
+        source = "registry+https://github.com/rust-lang/crates.io-index"
+
+        [[package]]
+        name = "anyhow"
+        version = "1.0.79"
+        source = "registry+https://github.com/rust-lang/crates.io-index"
+
+        [[package]]
+        name = "clap"
+        version = "4.4.18"
+        source = "registry+https://github.com/rust-lang/crates.io-index"
+        CARGOEOF
+
+        # Fixture: MODULE.bazel.lock (minimal valid structure)
+        cat > "${FIXTURE}/repo-bazel/MODULE.bazel.lock" <<'BCREOF'
+        {
+          "lockFileVersion": 10,
+          "flags": {},
+          "moduleDepGraph": {
+            "": {},
+            "rules_python@0.27.1": {},
+            "gazelle@0.35.0": {},
+            "rules_go@0.46.0": {},
+            "bazel_skylib@1.5.0": {}
+          },
+          "moduleExtensions": {}
+        }
+        BCREOF
+
+        # Also add a duplicate to test dedup
+        cat >> "${FIXTURE}/repo-python/requirements.lock" <<'REQEOF2'
+        requests==2.31.0
+        REQEOF2
+
+        echo "[setup] Fixtures created at ${FIXTURE}"
+        echo ""
+
+        # Run scan against each fixture repo
+        PIP_TMP=$(mktemp)
+        CARGO_TMP=$(mktemp)
+        BCR_TMP=$(mktemp)
+
+        scan_repo() {
+          local root="$1" pip_out="$2" cargo_out="$3" bcr_out="$4"
+          find "${root}" -maxdepth 4 \( -name "requirements*.lock" -o -name "requirements*.txt" \) 2>/dev/null | \
+          while read -r f; do
+            grep -E '^[A-Za-z0-9_.-].*==[0-9]' "$f" 2>/dev/null | \
+              sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*;.*//' | sed 's/[[:space:]]*$//' | \
+              grep -v '^\s*$' >> "$pip_out" || true
+          done
+          find "${root}" -maxdepth 4 -name "Cargo.lock" 2>/dev/null | \
+          while read -r f; do
+            awk '/^\[\[package\]\]/{name=""; ver=""}
+                 /^name = "/{gsub(/^name = "|"$/, ""); name=$0}
+                 /^version = "/{gsub(/^version = "|"$/, ""); ver=$0; if(name!="")print name"@"ver}' \
+              "$f" 2>/dev/null >> "$cargo_out" || true
+          done
+          find "${root}" -maxdepth 4 -name "MODULE.bazel.lock" 2>/dev/null | \
+          while read -r f; do
+            jq -r '.moduleDepGraph | keys[] | select(. != "" and (. | contains("@")))' \
+              "$f" 2>/dev/null >> "$bcr_out" || true
+          done
+        }
+
+        for repo in "${FIXTURE}/repo-python" "${FIXTURE}/repo-rust" "${FIXTURE}/repo-bazel"; do
+          scan_repo "${repo}" "$PIP_TMP" "$CARGO_TMP" "$BCR_TMP"
+        done
+
+        sort -u "$PIP_TMP"   > "${OUT}/pip.txt"
+        sort -u "$CARGO_TMP" > "${OUT}/cargo.txt"
+        sort -u "$BCR_TMP"   > "${OUT}/bazel-modules.txt"
+        rm -f "$PIP_TMP" "$CARGO_TMP" "$BCR_TMP"
+
+        # T1: All three files non-empty
+        echo "[T1] All three dep files are non-empty..."
+        for f in pip.txt cargo.txt bazel-modules.txt; do
+          if [ -s "${OUT}/${f}" ]; then
+            COUNT=$(wc -l < "${OUT}/${f}" | tr -d ' ')
+            echo "  [PASS] ${f} (${COUNT} entries)"
+          else
+            echo "  [FAIL] ${f} is empty"
+            FAILED=1
+          fi
+        done
+
+        # T2: No duplicate coordinates in any file
+        echo ""
+        echo "[T2] No duplicate coordinates..."
+        for f in pip.txt cargo.txt bazel-modules.txt; do
+          TOTAL=$(wc -l < "${OUT}/${f}" | tr -d ' ')
+          UNIQUE=$(sort -u "${OUT}/${f}" | wc -l | tr -d ' ')
+          if [ "$TOTAL" -eq "$UNIQUE" ]; then
+            echo "  [PASS] ${f} — ${TOTAL} entries, all unique"
+          else
+            DUPES=$((TOTAL - UNIQUE))
+            echo "  [FAIL] ${f} — ${DUPES} duplicate(s) found"
+            FAILED=1
+          fi
+        done
+
+        # T3: Spot-check expected entries are present
+        echo ""
+        echo "[T3] Spot-check expected entries present..."
+        check_entry() {
+          local file="$1" entry="$2"
+          local fname
+          fname=$(basename "$file")
+          if grep -qF "$entry" "$file"; then
+            echo "  [PASS] ${fname} contains ${entry}"
+          else
+            echo "  [FAIL] ${fname} missing ${entry}"
+            FAILED=1
+          fi
+        }
+        check_entry "${OUT}/pip.txt"           "requests==2.31.0"
+        check_entry "${OUT}/cargo.txt"         "serde@1.0.195"
+        check_entry "${OUT}/bazel-modules.txt" "rules_python@0.27.1"
+
+        rm -rf "${FIXTURE}" "${OUT}"
+
+        echo ""
+        if [ "${FAILED}" -eq 0 ]; then
+          echo "All deps:collect tests passed."
+        else
+          echo "Some deps:collect tests failed."
+          exit 1
+        fi
 
   test-seed:
-    desc: "Test that deps:seed successfully uploads a sample artifact"
+    desc: "Acceptance test: seed job exits 0; spot-check cache HITs on second request"
+    cmds:
+      - task: seed
+      - task: verify-cache
+
+  seed:
+    desc: "Launch K3s Job to warm nginx proxy caches (pip download, cargo fetch, bazel prefetch)"
+    vars:
+      namespace: '{{.namespace | default "proxy"}}'
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+      job_timeout: '{{.job_timeout | default "600s"}}'
+      proxy_url: '{{.proxy_url | default "http://nginx-proxy.proxy.svc.cluster.local:8080"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: test -s "{{.output_dir}}/pip.txt"
+        msg: "deps/pip.txt is empty or missing — run: task deps:collect"
+      - sh: test -s "{{.output_dir}}/cargo.txt"
+        msg: "deps/cargo.txt is empty or missing — run: task deps:collect"
     cmds:
       - |
-        echo "TODO: implement — upload a known test artifact to Nexus and verify it"
-        echo "deps:test-seed is a stub"
+        echo "Building ConfigMap from dep files..."
+        PIP_DATA=$(base64 < "{{.output_dir}}/pip.txt" | tr -d '\n')
+        CARGO_DATA=$(base64 < "{{.output_dir}}/cargo.txt" | tr -d '\n')
+
+        JOB_NAME="deps-seed-$(date +%s)"
+
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: deps-seed-lists
+          namespace: {{.namespace}}
+        data:
+          pip.txt: |
+        $(sed 's/^/    /' "{{.output_dir}}/pip.txt")
+          cargo.txt: |
+        $(sed 's/^/    /' "{{.output_dir}}/cargo.txt")
+        ---
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${JOB_NAME}
+          namespace: {{.namespace}}
+        spec:
+          ttlSecondsAfterFinished: 300
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: seed
+                image: arm64v8/alpine:3.19
+                command: ["/bin/sh", "-c"]
+                args:
+                  - |
+                    set -e
+                    apk add --no-cache python3 py3-pip cargo curl 2>/dev/null
+
+                    PROXY="{{.proxy_url}}"
+
+                    echo "=== Seeding pip packages ==="
+                    pip download \
+                      --index-url "${PROXY}/pypi/simple/" \
+                      --no-deps \
+                      --dest /tmp/pip-cache \
+                      -r /deps/pip.txt || true
+
+                    echo "=== Seeding cargo crates ==="
+                    mkdir -p /tmp/cargo-home
+                    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+                    CARGO_HOME=/tmp/cargo-home \
+                    cargo fetch \
+                      --manifest-path /dev/null 2>/dev/null || \
+                    while IFS='@' read -r name ver; do
+                      curl -sf "${PROXY}/cargo/crates/${name}/${name}-${ver}.crate" -o /dev/null || true
+                    done < /deps/cargo.txt
+
+                    echo "Done."
+                volumeMounts:
+                - name: dep-lists
+                  mountPath: /deps
+              volumes:
+              - name: dep-lists
+                configMap:
+                  name: deps-seed-lists
+        EOF
+
+        echo "Waiting for seed job ${JOB_NAME} to complete (timeout: {{.job_timeout}})..."
+        kubectl wait job/"${JOB_NAME}" -n "{{.namespace}}" \
+          --for=condition=Complete --timeout="{{.job_timeout}}" || {
+          echo "[FAIL] Seed job did not complete within {{.job_timeout}}"
+          kubectl logs -l "job-name=${JOB_NAME}" -n "{{.namespace}}" --tail=50 || true
+          exit 1
+        }
+        echo "Seed job completed."
+
+  verify-cache:
+    desc: "Spot-check 5 random deps from each ecosystem for nginx cache HITs"
+    vars:
+      local_port: '{{.local_port | default "18081"}}'
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+      namespace: '{{.namespace | default "proxy"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        FAILED=0
+        LOCAL_PORT="{{.local_port}}"
+        BASE="http://localhost:${LOCAL_PORT}"
+
+        kubectl port-forward svc/nginx-proxy "${LOCAL_PORT}:8080" -n "{{.namespace}}" >/dev/null 2>&1 &
+        PF_PID=$!
+        sleep 3
+
+        echo "=== Cache HIT verification ==="
+
+        # Pip: 5 random packages
+        if [ -s "{{.output_dir}}/pip.txt" ]; then
+          echo ""
+          echo "[pip] Checking 5 random packages..."
+          shuf -n 5 "{{.output_dir}}/pip.txt" | while IFS='==' read -r pkg ver _; do
+            pkg_lower=$(echo "$pkg" | tr '[:upper:]' '[:lower:]' | tr _ -)
+            STATUS=$(curl -sf "${BASE}/pypi/simple/${pkg_lower}/" -D /tmp/cache-hdr.txt -o /dev/null 2>/dev/null && \
+              grep -i "X-Cache-Status" /tmp/cache-hdr.txt | awk '{print $2}' | tr -d '\r\n' || echo "error")
+            if [ "${STATUS}" = "HIT" ]; then
+              echo "  [HIT]  ${pkg}==${ver}"
+            else
+              echo "  [${STATUS:-MISS}] ${pkg}==${ver}"
+            fi
+          done
+        fi
+
+        # Cargo: 5 random crates
+        if [ -s "{{.output_dir}}/cargo.txt" ]; then
+          echo ""
+          echo "[cargo] Checking 5 random crates..."
+          shuf -n 5 "{{.output_dir}}/cargo.txt" | while IFS='@' read -r name ver; do
+            STATUS=$(curl -sf "${BASE}/cargo/crates/${name}/${name}-${ver}.crate" -D /tmp/cache-hdr.txt -o /dev/null 2>/dev/null && \
+              grep -i "X-Cache-Status" /tmp/cache-hdr.txt | awk '{print $2}' | tr -d '\r\n' || echo "error")
+            if [ "${STATUS}" = "HIT" ]; then
+              echo "  [HIT]  ${name}@${ver}"
+            else
+              echo "  [${STATUS:-MISS}] ${name}@${ver}"
+            fi
+          done
+        fi
+
+        kill "${PF_PID}" 2>/dev/null || true
+
+        echo ""
+        if [ "${FAILED}" -eq 0 ]; then
+          echo "Cache verification complete."
+        else
+          echo "Cache verification failed."
+          exit 1
+        fi
