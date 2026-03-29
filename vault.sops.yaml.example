@@ -7,8 +7,6 @@
 # Never commit vault.sops.yaml in plaintext — the pre-commit hook will block it.
 # Only vault.sops.yaml.example (this file) is committed unencrypted.
 #
-postgres_password: "changeme"
-nexus_admin_password: "changeme"
-nexus_docker_port: "5000"
+registry_port: "5000"
 github_org: "myorg"
 runner_token: "ghp_yourtoken"

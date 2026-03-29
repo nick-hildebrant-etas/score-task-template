@@ -38,57 +38,87 @@ tasks:
         echo "Image built: {{.image_name}}:{{.image_tag}}"
 
   push-worker:
-    desc: "Push worker image to Nexus Docker registry"
+    desc: "Push worker image to registry:2 OCI registry"
     vars:
-      image_name: '{{.image_name | default "arm64-worker"}}'
-      image_tag: '{{.image_tag | default "latest"}}'
-      nexus_host: '{{.nexus_host | default "localhost"}}'
+      image_name: '{{.image_name | default "build-worker"}}'
+      image_tag: '{{.image_tag | default "alpine-arm64"}}'
+      registry_host: '{{.registry_host | default "localhost"}}'
+      vm_name: '{{.vm_name | default "k3s"}}'
     preconditions:
-      - sh: '[ -n "${NEXUS_DOCKER_PORT}" ]'
-        msg: "NEXUS_DOCKER_PORT is not set. Run: task secrets:envgen"
-      - sh: '[ -n "${NEXUS_ADMIN_PASSWORD}" ]'
-        msg: "NEXUS_ADMIN_PASSWORD is not set. Run: task secrets:envgen"
+      - sh: '[ -n "${REGISTRY_PORT}" ]'
+        msg: "REGISTRY_PORT is not set. Run: task secrets:envgen"
+      - sh: command -v limactl >/dev/null 2>&1
+        msg: "limactl is not installed. Run: brew install lima"
     cmds:
       - |
-        REGISTRY="{{.nexus_host}}:${NEXUS_DOCKER_PORT}"
+        REGISTRY="{{.registry_host}}:${REGISTRY_PORT}"
         REMOTE_IMAGE="${REGISTRY}/{{.image_name}}:{{.image_tag}}"
 
-        echo "Logging into Nexus Docker registry at ${REGISTRY}..."
-        echo "${NEXUS_ADMIN_PASSWORD}" | docker login "${REGISTRY}" -u admin --password-stdin
-
-        echo "Tagging {{.image_name}}:{{.image_tag}} -> ${REMOTE_IMAGE}..."
-        docker tag "{{.image_name}}:{{.image_tag}}" "${REMOTE_IMAGE}"
-
-        echo "Pushing ${REMOTE_IMAGE}..."
-        docker push "${REMOTE_IMAGE}"
+        echo "Pushing {{.image_name}}:{{.image_tag}} to registry:2 at ${REGISTRY}..."
+        limactl shell "{{.vm_name}}" -- bash -c "
+          sudo nerdctl tag '{{.image_name}}:{{.image_tag}}' '${REMOTE_IMAGE}' &&
+          sudo nerdctl push --insecure-registry '${REMOTE_IMAGE}'
+        "
         echo "Image pushed: ${REMOTE_IMAGE}"
 
   list:
-    desc: "List worker images in local Docker and Nexus registry"
+    desc: "List worker images in registry:2"
     vars:
-      image_name: '{{.image_name | default "arm64-worker"}}'
-      nexus_host: '{{.nexus_host | default "localhost"}}'
+      image_name: '{{.image_name | default "build-worker"}}'
+      registry_host: '{{.registry_host | default "localhost"}}'
+      local_port: '{{.local_port | default "15000"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:
       - |
-        echo "=== Local Docker images ({{.image_name}}) ==="
-        docker images "{{.image_name}}" || echo "(docker unavailable)"
-      - |
-        echo ""
-        echo "TODO: implement — list images in Nexus Docker registry"
-        echo "images:list (Nexus) is a stub"
+        kubectl port-forward svc/registry-svc "${local_port}:5000" -n registry >/dev/null 2>&1 &
+        PF_PID=$!
+        sleep 2
+        echo "=== Images in registry:2 ==="
+        curl -sf "http://localhost:${local_port}/v2/_catalog" 2>/dev/null || echo "(registry unreachable)"
+        kill "${PF_PID}" 2>/dev/null || true
 
   test:
-    desc: "Test that worker image runs and has expected tools"
+    desc: "Acceptance test: worker image exists in registry:2; uname -m returns aarch64"
     vars:
-      image_name: '{{.image_name | default "arm64-worker"}}'
-      image_tag: '{{.image_tag | default "latest"}}'
+      image_name: '{{.image_name | default "build-worker"}}'
+      image_tag: '{{.image_tag | default "alpine-arm64"}}'
+      vm_name: '{{.vm_name | default "k3s"}}'
+    preconditions:
+      - sh: '[ -n "${REGISTRY_PORT}" ]'
+        msg: "REGISTRY_PORT is not set. Run: task secrets:envgen"
+      - sh: command -v limactl >/dev/null 2>&1
+        msg: "limactl is not installed. Run: brew install lima"
     cmds:
       - |
-        echo "TODO: implement — run worker image and verify tools are present"
+        FAILED=0
+        REGISTRY="localhost:${REGISTRY_PORT}"
+        IMAGE="${REGISTRY}/{{.image_name}}:{{.image_tag}}"
+
+        echo "=== Worker image acceptance tests ==="
         echo ""
-        echo "This task should:"
-        echo "  1. docker run --rm --platform linux/arm64 {{.image_name}}:{{.image_tag}} bash --version"
-        echo "  2. Verify java, python3, cargo are present"
-        echo "  3. Verify uname -m returns aarch64"
+
+        echo "[T1] Pull worker image from registry:2..."
+        if limactl shell "{{.vm_name}}" -- sudo nerdctl pull --insecure-registry "${IMAGE}" >/dev/null 2>&1; then
+          echo "  [PASS] Pull succeeded: ${IMAGE}"
+        else
+          echo "  [FAIL] Could not pull ${IMAGE}"
+          FAILED=1
+        fi
+
+        echo "[T2] uname -m returns aarch64..."
+        ARCH=$(limactl shell "{{.vm_name}}" -- sudo nerdctl run --rm --insecure-registry "${IMAGE}" uname -m 2>/dev/null || echo "error")
+        if [ "${ARCH}" = "aarch64" ]; then
+          echo "  [PASS] uname -m: ${ARCH}"
+        else
+          echo "  [FAIL] uname -m: ${ARCH} (expected aarch64)"
+          FAILED=1
+        fi
+
         echo ""
-        echo "images:test is a stub"
+        if [ "${FAILED}" -eq 0 ]; then
+          echo "All image tests passed."
+        else
+          echo "Some image tests failed."
+          exit 1
+        fi

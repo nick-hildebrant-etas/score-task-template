@@ -177,7 +177,7 @@ PVC (local-path, 20Gi) holds the nginx cache. No auth, no user management, no da
 
 ---
 
-#### F-04 · OCI image registry · 5 pts
+#### ~~F-04 · OCI image registry · 5 pts~~ ✓ DONE
 
 **Tasks introduced**
 - `task registry:install`
