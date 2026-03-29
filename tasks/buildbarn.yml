@@ -1,0 +1,124 @@
+version: "3"
+
+tasks:
+  install-storage:
+    desc: "Install Buildbarn storage (bb-storage) via Helm"
+    vars:
+      release_name: '{{.release_name | default "bb-storage"}}'
+      namespace: '{{.namespace | default "buildbarn"}}'
+      chart: '{{.chart | default "buildbarn/bb-storage"}}'
+      chart_version: '{{.chart_version | default ""}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: command -v helm >/dev/null 2>&1
+        msg: "helm is not installed. Run: brew install helm"
+    cmds:
+      - |
+        echo "TODO: implement — add buildbarn helm repo and install bb-storage"
+        echo ""
+        echo "This task should:"
+        echo "  1. helm repo add buildbarn https://github.com/buildbarn/bb-deployments"
+        echo "  2. helm upgrade --install bb-storage ... --namespace buildbarn"
+        echo ""
+        echo "buildbarn:install-storage is a stub"
+
+  install-scheduler:
+    desc: "Install Buildbarn scheduler (bb-scheduler) via Helm"
+    vars:
+      release_name: '{{.release_name | default "bb-scheduler"}}'
+      namespace: '{{.namespace | default "buildbarn"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "TODO: implement — install bb-scheduler"
+        echo "buildbarn:install-scheduler is a stub"
+
+  install-workers:
+    desc: "Install Buildbarn workers (bb-worker) for ARM64 builds"
+    vars:
+      release_name: '{{.release_name | default "bb-worker"}}'
+      namespace: '{{.namespace | default "buildbarn"}}'
+      worker_replicas: '{{.worker_replicas | default "2"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: '[ -n "${BB_SCHEDULER_ADDR}" ]'
+        msg: "BB_SCHEDULER_ADDR is not set. Run: task secrets:envgen"
+    cmds:
+      - |
+        echo "TODO: implement — install bb-worker with ARM64 worker image"
+        echo ""
+        echo "This task should:"
+        echo "  1. Deploy bb-worker DaemonSet/Deployment pointing at BB_SCHEDULER_ADDR"
+        echo "  2. Use the worker image from Nexus registry"
+        echo "  3. Set nodeSelector/tolerations for arm64"
+        echo ""
+        echo "buildbarn:install-workers is a stub"
+
+  wait:
+    desc: "Wait for all Buildbarn pods to be ready"
+    vars:
+      namespace: '{{.namespace | default "buildbarn"}}'
+      timeout: '{{.timeout | default "300s"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "TODO: implement — wait for bb-storage, bb-scheduler, bb-worker pods"
+        echo "buildbarn:wait is a stub"
+        kubectl get pods -n "{{.namespace}}" 2>/dev/null || echo "(kubectl unavailable)"
+
+  scale-workers:
+    desc: "Scale Buildbarn worker replicas"
+    vars:
+      namespace: '{{.namespace | default "buildbarn"}}'
+      replicas: '{{.replicas | default "2"}}'
+      deployment: '{{.deployment | default "bb-worker"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Scaling {{.deployment}} to {{.replicas}} replicas in namespace {{.namespace}}..."
+        kubectl scale deployment "{{.deployment}}" \
+          --replicas="{{.replicas}}" \
+          -n "{{.namespace}}"
+        kubectl rollout status deployment/"{{.deployment}}" -n "{{.namespace}}"
+
+  uninstall:
+    desc: "Uninstall all Buildbarn Helm releases"
+    vars:
+      namespace: '{{.namespace | default "buildbarn"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Uninstalling Buildbarn releases from namespace '{{.namespace}}'..."
+        for release in bb-storage bb-scheduler bb-worker; do
+          helm uninstall "$release" --namespace "{{.namespace}}" 2>/dev/null || \
+            echo "Release '$release' not found — skipping."
+        done
+      - |
+        echo "Removing PVCs in namespace {{.namespace}}..."
+        kubectl delete pvc --all -n "{{.namespace}}" --ignore-not-found=true
+
+  test-scheduler:
+    desc: "Test that Buildbarn scheduler is reachable via gRPC"
+    vars:
+      scheduler_addr: '{{.scheduler_addr | default "${BB_SCHEDULER_ADDR}"}}'
+    cmds:
+      - |
+        echo "TODO: implement — probe bb-scheduler via grpc-health-probe"
+        echo ""
+        echo "This task should:"
+        echo "  grpc-health-probe -addr={{.scheduler_addr}}"
+        echo ""
+        echo "buildbarn:test-scheduler is a stub"
+
+  test-rbe:
+    desc: "End-to-end RBE test: submit a sample build action"
+    cmds:
+      - |
+        echo "TODO: implement — submit a trivial build action to Buildbarn RBE and verify execution"
+        echo "buildbarn:test-rbe is a stub"

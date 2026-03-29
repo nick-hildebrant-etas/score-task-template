@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# Block commits that would expose secrets
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+STAGED=$(git diff --cached --name-only)
+FAILED=0
+
+# Block .env — gitignore can be bypassed with -f
+if echo "$STAGED" | grep -q "^\.env$"; then
+  echo "ERROR: .env is staged. This file contains plaintext secrets and must never be committed."
+  echo "Run: git restore --staged .env"
+  FAILED=1
+fi
+
+# Block any *.sops.yaml file that is missing the sops: encryption marker
+for f in $(echo "$STAGED" | grep '\.sops\.yaml$'); do
+  if ! grep -q "^sops:" "$REPO_ROOT/$f" 2>/dev/null; then
+    echo "ERROR: $f is staged but does not appear to be SOPS-encrypted."
+    echo "Run: sops -e -i $f"
+    FAILED=1
+  fi
+done
+
+exit $FAILED

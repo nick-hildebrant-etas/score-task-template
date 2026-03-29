@@ -1,0 +1,82 @@
+version: "3"
+
+tasks:
+  install:
+    desc: "Install Bitnami PostgreSQL via Helm into the postgres namespace"
+    vars:
+      release_name: '{{.release_name | default "postgres"}}'
+      namespace: '{{.namespace | default "postgres"}}'
+      chart: '{{.chart | default "bitnami/postgresql"}}'
+      chart_version: '{{.chart_version | default ""}}'
+      pvc_size: '{{.pvc_size | default "10Gi"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: command -v helm >/dev/null 2>&1
+        msg: "helm is not installed. Run: brew install helm"
+      - sh: '[ -n "${POSTGRES_PASSWORD}" ]'
+        msg: "POSTGRES_PASSWORD is not set. Run: task secrets:envgen"
+    cmds:
+      - |
+        echo "Adding Bitnami Helm repo..."
+        helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || true
+        helm repo update bitnami
+      - |
+        echo "Installing PostgreSQL (release: {{.release_name}}, namespace: {{.namespace}})..."
+        helm upgrade --install "{{.release_name}}" "{{.chart}}" \
+          --namespace "{{.namespace}}" \
+          --create-namespace \
+          {{if .chart_version}}--version "{{.chart_version}}" \{{end}}
+          --set auth.postgresPassword="${POSTGRES_PASSWORD}" \
+          --set auth.database=platform \
+          --set primary.persistence.size="{{.pvc_size}}" \
+          --set primary.persistence.storageClass=local-path \
+          --wait --timeout=5m
+        echo "PostgreSQL installed."
+
+  wait:
+    desc: "Wait for PostgreSQL pods to be ready"
+    vars:
+      release_name: '{{.release_name | default "postgres"}}'
+      namespace: '{{.namespace | default "postgres"}}'
+      timeout: '{{.timeout | default "300s"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Waiting for PostgreSQL pods in namespace {{.namespace}}..."
+        kubectl wait --for=condition=Ready pod \
+          -l app.kubernetes.io/name=postgresql \
+          -n "{{.namespace}}" \
+          --timeout="{{.timeout}}"
+        echo "PostgreSQL is ready."
+        kubectl get pods -n "{{.namespace}}"
+
+  uninstall:
+    desc: "Uninstall PostgreSQL Helm release"
+    vars:
+      release_name: '{{.release_name | default "postgres"}}'
+      namespace: '{{.namespace | default "postgres"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Uninstalling PostgreSQL release '{{.release_name}}' from namespace '{{.namespace}}'..."
+        helm uninstall "{{.release_name}}" --namespace "{{.namespace}}" 2>/dev/null || \
+          echo "Release '{{.release_name}}' not found — nothing to uninstall."
+      - |
+        echo "Removing PVCs in namespace {{.namespace}}..."
+        kubectl delete pvc --all -n "{{.namespace}}" --ignore-not-found=true
+
+  test:
+    desc: "Smoke test: connect to PostgreSQL and run a query"
+    vars:
+      release_name: '{{.release_name | default "postgres"}}'
+      namespace: '{{.namespace | default "postgres"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "TODO: implement — connect to postgres and run SELECT 1"
+        echo "postgres:test is a stub"
+        # TODO: kubectl exec into postgres pod and run psql -c "SELECT 1"

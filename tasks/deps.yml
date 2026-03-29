@@ -1,0 +1,81 @@
+version: "3"
+
+tasks:
+  collect:
+    desc: "Scrape lockfiles and collect dependency manifests"
+    vars:
+      workspace_dir: '{{.workspace_dir | default (printf "%s/work" .HOME)}}'
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+    cmds:
+      - mkdir -p "{{.output_dir}}"
+      - |
+        echo "TODO: implement — scan workspace for lockfiles and collect dependency lists"
+        echo ""
+        echo "This task should:"
+        echo "  1. Find all pom.xml, requirements.txt, Cargo.lock, go.sum files under {{.workspace_dir}}"
+        echo "  2. Parse each lockfile to extract artifact coordinates + checksums"
+        echo "  3. Write a unified manifest to {{.output_dir}}/deps-manifest.json"
+        echo ""
+        echo "deps:collect is a stub"
+
+  diff:
+    desc: "Show diff of dependency manifest vs last committed version"
+    vars:
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+    cmds:
+      - |
+        echo "TODO: implement — diff deps-manifest.json against HEAD"
+        echo "deps:diff is a stub"
+
+  commit:
+    desc: "Commit updated dependency manifest to repo"
+    vars:
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+      score_task_dir: '{{.score_task_dir | default (printf "%s/.score-task" .HOME)}}'
+    cmds:
+      - |
+        echo "TODO: implement — git commit updated deps-manifest.json"
+        echo "deps:commit is a stub"
+
+  seed:
+    desc: "Warm Nexus caches by uploading collected dependencies"
+    vars:
+      output_dir: '{{.output_dir | default (printf "%s/.score-task/deps" .HOME)}}'
+      nexus_url: '{{.nexus_url | default "http://localhost:8081"}}'
+    preconditions:
+      - sh: '[ -n "${NEXUS_ADMIN_PASSWORD}" ]'
+        msg: "NEXUS_ADMIN_PASSWORD is not set. Run: task secrets:envgen"
+    cmds:
+      - |
+        echo "TODO: implement — upload dependencies from manifest to Nexus"
+        echo ""
+        echo "This task should:"
+        echo "  1. Read {{.output_dir}}/deps-manifest.json"
+        echo "  2. For each artifact, upload to the appropriate Nexus repo"
+        echo "     (Maven, PyPI, Cargo, Go module) via Nexus REST API"
+        echo "  3. Report upload success/failure counts"
+        echo ""
+        echo "deps:seed is a stub"
+
+  verify-cache:
+    desc: "Verify that seeded dependencies are resolvable from Nexus"
+    vars:
+      nexus_url: '{{.nexus_url | default "http://localhost:8081"}}'
+    cmds:
+      - |
+        echo "TODO: implement — probe Nexus to verify key dependencies are cached"
+        echo "deps:verify-cache is a stub"
+
+  test-collect:
+    desc: "Test that deps:collect produces a valid manifest"
+    cmds:
+      - |
+        echo "TODO: implement — run deps:collect on a test workspace and validate output"
+        echo "deps:test-collect is a stub"
+
+  test-seed:
+    desc: "Test that deps:seed successfully uploads a sample artifact"
+    cmds:
+      - |
+        echo "TODO: implement — upload a known test artifact to Nexus and verify it"
+        echo "deps:test-seed is a stub"

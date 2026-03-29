@@ -1,0 +1,121 @@
+version: "3"
+
+tasks:
+  install-controller:
+    desc: "Install actions-runner-controller via Helm"
+    vars:
+      release_name: '{{.release_name | default "actions-runner-controller"}}'
+      namespace: '{{.namespace | default "actions-runner"}}'
+      chart: '{{.chart | default "actions-runner-controller/actions-runner-controller"}}'
+      chart_version: '{{.chart_version | default ""}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: command -v helm >/dev/null 2>&1
+        msg: "helm is not installed. Run: brew install helm"
+      - sh: '[ -n "${RUNNER_TOKEN}" ]'
+        msg: "RUNNER_TOKEN is not set. Run: task secrets:envgen"
+      - sh: '[ -n "${GITHUB_ORG}" ]'
+        msg: "GITHUB_ORG is not set. Run: task secrets:envgen"
+    cmds:
+      - |
+        echo "Adding actions-runner-controller Helm repo..."
+        helm repo add actions-runner-controller \
+          https://actions-runner-controller.github.io/actions-runner-controller 2>/dev/null || true
+        helm repo update actions-runner-controller
+      - |
+        echo "Installing actions-runner-controller (release: {{.release_name}}, namespace: {{.namespace}})..."
+        helm upgrade --install "{{.release_name}}" "{{.chart}}" \
+          --namespace "{{.namespace}}" \
+          --create-namespace \
+          {{if .chart_version}}--version "{{.chart_version}}" \{{end}}
+          --set authSecret.create=true \
+          --set authSecret.github_token="${RUNNER_TOKEN}" \
+          --wait --timeout=5m
+        echo "actions-runner-controller installed."
+
+  register-runner:
+    desc: "Register a self-hosted GitHub Actions runner for the org"
+    vars:
+      namespace: '{{.namespace | default "actions-runner"}}'
+      runner_replicas: '{{.runner_replicas | default "2"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: '[ -n "${GITHUB_ORG}" ]'
+        msg: "GITHUB_ORG is not set. Run: task secrets:envgen"
+    cmds:
+      - |
+        echo "TODO: implement — apply RunnerDeployment CR for org ${GITHUB_ORG}"
+        echo ""
+        echo "This task should apply a manifest like:"
+        cat <<'MANIFEST'
+        apiVersion: actions.summerwind.dev/v1alpha1
+        kind: RunnerDeployment
+        metadata:
+          name: arm64-runner
+          namespace: actions-runner
+        spec:
+          replicas: 2
+          template:
+            spec:
+              organization: <GITHUB_ORG>
+              labels:
+                - arm64
+                - self-hosted
+        MANIFEST
+        echo ""
+        echo "actions:register-runner is a stub"
+
+  status:
+    desc: "Show GitHub Actions runner status"
+    vars:
+      namespace: '{{.namespace | default "actions-runner"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "=== Actions Runner Controller pods ==="
+        kubectl get pods -n "{{.namespace}}" 2>/dev/null || echo "(kubectl unavailable)"
+      - |
+        echo ""
+        echo "=== Runner deployments ==="
+        kubectl get runnerdeployment -n "{{.namespace}}" 2>/dev/null || \
+          echo "(no RunnerDeployment CRDs found)"
+      - |
+        echo ""
+        echo "=== Runners ==="
+        kubectl get runner -n "{{.namespace}}" 2>/dev/null || \
+          echo "(no Runner CRDs found)"
+
+  uninstall:
+    desc: "Uninstall actions-runner-controller and remove runner registrations"
+    vars:
+      release_name: '{{.release_name | default "actions-runner-controller"}}'
+      namespace: '{{.namespace | default "actions-runner"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Removing runner deployments..."
+        kubectl delete runnerdeployment --all -n "{{.namespace}}" --ignore-not-found=true
+      - |
+        echo "Uninstalling actions-runner-controller release '{{.release_name}}'..."
+        helm uninstall "{{.release_name}}" --namespace "{{.namespace}}" 2>/dev/null || \
+          echo "Release '{{.release_name}}' not found — nothing to uninstall."
+
+  test:
+    desc: "Test that runners are registered and online"
+    vars:
+      namespace: '{{.namespace | default "actions-runner"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "TODO: implement — verify runners are in Ready state"
+        echo ""
+        echo "This task should:"
+        echo "  1. kubectl get runner -n {{.namespace}} and check status"
+        echo "  2. Optionally: use GitHub API to verify runners appear as online"
+        echo ""
+        echo "actions:test is a stub"

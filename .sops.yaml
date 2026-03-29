@@ -1,0 +1,11 @@
+# .sops.yaml — SOPS encryption configuration
+#
+# Replace age1REPLACEME with your actual age public key.
+# To generate a new key:
+#   task secrets:keygen
+# The public key will be printed — paste it here in place of age1REPLACEME.
+# Then commit this file (the public key is not secret).
+#
+creation_rules:
+  - path_regex: vault\.sops\.yaml$
+    age: age1REPLACEME

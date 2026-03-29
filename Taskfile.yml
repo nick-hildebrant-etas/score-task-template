@@ -1,0 +1,137 @@
+version: "3"
+
+dotenv:
+  - "~/.score-task/.env"
+
+includes:
+  secrets:
+    taskfile: "{{.HOME}}/.score-task/secrets.yml"
+    optional: true
+  k3s:
+    taskfile: "{{.HOME}}/.score-task/tasks/k3s.yml"
+    optional: true
+  storage:
+    taskfile: "{{.HOME}}/.score-task/tasks/storage.yml"
+    optional: true
+  postgres:
+    taskfile: "{{.HOME}}/.score-task/tasks/postgres.yml"
+    optional: true
+  nexus:
+    taskfile: "{{.HOME}}/.score-task/tasks/nexus.yml"
+    optional: true
+  deps:
+    taskfile: "{{.HOME}}/.score-task/tasks/deps.yml"
+    optional: true
+  buildbarn:
+    taskfile: "{{.HOME}}/.score-task/tasks/buildbarn.yml"
+    optional: true
+  images:
+    taskfile: "{{.HOME}}/.score-task/tasks/images.yml"
+    optional: true
+  actions:
+    taskfile: "{{.HOME}}/.score-task/tasks/actions.yml"
+    optional: true
+  test:
+    taskfile: "{{.HOME}}/.score-task/tasks/test.yml"
+    optional: true
+  dev:
+    taskfile: "{{.HOME}}/.score-task/tasks/dev.yml"
+    optional: true
+
+tasks:
+  default:
+    desc: "Bootstrap: clone repo and symlink Taskfile"
+    cmds:
+      - task: checkout
+      - task: link
+
+  checkout:
+    desc: "Clone score-task-template repo to ~/.score-task"
+    vars:
+      score_task_dir: '{{.score_task_dir | default (printf "%s/.score-task" .HOME)}}'
+      repo: '{{.repo | default "https://github.com/nick-hildebrant-etas/score-task-template.git"}}'
+      branch: '{{.branch | default "main"}}'
+    cmds:
+      - |
+        if [ ! -d "{{.score_task_dir}}/.git" ]; then
+          echo "Cloning repo to {{.score_task_dir}}..."
+          git clone --branch "{{.branch}}" "{{.repo}}" "{{.score_task_dir}}"
+        else
+          echo "Repo already exists at {{.score_task_dir}}, pulling latest..."
+          git -C "{{.score_task_dir}}" pull --ff-only
+        fi
+
+  link:
+    desc: "Symlink ~/.score-task/Taskfile.yml → ~/Taskfile.yml"
+    vars:
+      score_task_dir: '{{.score_task_dir | default (printf "%s/.score-task" .HOME)}}'
+      taskfile_link: '{{.taskfile_link | default (printf "%s/Taskfile.yml" .HOME)}}'
+    cmds:
+      - |
+        if [ -L "{{.taskfile_link}}" ]; then
+          echo "Symlink {{.taskfile_link}} already exists, updating..."
+          ln -sf "{{.score_task_dir}}/Taskfile.yml" "{{.taskfile_link}}"
+        else
+          echo "Creating symlink {{.taskfile_link}} -> {{.score_task_dir}}/Taskfile.yml"
+          ln -sf "{{.score_task_dir}}/Taskfile.yml" "{{.taskfile_link}}"
+        fi
+
+  brew:
+    desc: "Install Homebrew packages from Brewfile"
+    vars:
+      brewfile: '{{.brewfile | default (printf "%s/.score-task/Brewfile" .HOME)}}'
+    cmds:
+      - brew bundle --file="{{.brewfile}}"
+
+  hooks:
+    desc: "Install git hooks into .git/hooks/"
+    vars:
+      hooks_src: '{{.hooks_src | default (printf "%s/.score-task/hooks" .HOME)}}'
+      hooks_dst: '{{.hooks_dst | default (printf "%s/.score-task/.git/hooks" .HOME)}}'
+    cmds:
+      - mkdir -p "{{.hooks_dst}}"
+      - cp "{{.hooks_src}}/pre-commit" "{{.hooks_dst}}/pre-commit"
+      - chmod +x "{{.hooks_dst}}/pre-commit"
+
+  install:
+    desc: "Full installation: brew, secrets check, link, hooks"
+    cmds:
+      - task: brew
+      - task: secrets:doctor
+      - task: link
+      - task: hooks
+
+  up:
+    desc: "Bring up the full ARM build platform in order"
+    cmds:
+      - task: k3s:install
+      - task: storage:setup
+      - task: postgres:install
+      - task: postgres:wait
+      - task: nexus:install
+      - task: nexus:wait
+      - task: nexus:configure
+      - task: deps:seed
+      - task: images:build-worker
+      - task: images:push-worker
+      - task: buildbarn:install-storage
+      - task: buildbarn:install-scheduler
+      - task: buildbarn:install-workers
+      - task: buildbarn:wait
+      - task: actions:install-controller
+      - task: actions:register-runner
+
+  down:
+    desc: "Tear down the full ARM build platform in reverse order"
+    cmds:
+      - task: actions:uninstall
+      - task: buildbarn:uninstall
+      - task: nexus:uninstall
+      - task: postgres:uninstall
+      - task: storage:teardown
+      - task: k3s:uninstall
+
+  status:
+    desc: "Show overall platform status"
+    cmds:
+      - task: dev:status

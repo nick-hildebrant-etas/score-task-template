@@ -1,0 +1,56 @@
+version: "3"
+
+tasks:
+  smoke:
+    desc: "Run all platform smoke tests in sequence"
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - task: k3s:test
+      - |
+        echo "TODO: implement — run smoke tests for storage, postgres, nexus, buildbarn, actions"
+        echo ""
+        echo "Full smoke test suite (test:smoke) is a stub"
+        echo "Currently only k3s:test is wired up."
+
+  matrix-smoke:
+    desc: "Run smoke tests across multiple build configurations"
+    vars:
+      configs_file: '{{.configs_file | default (printf "%s/.score-task/test/matrix-configs.yml" .HOME)}}'
+    cmds:
+      - |
+        echo "TODO: implement — run test matrix against multiple build configs"
+        echo ""
+        echo "This task should:"
+        echo "  1. Read matrix configurations from {{.configs_file}}"
+        echo "  2. For each config, submit a sample build job via Buildbarn RBE"
+        echo "  3. Collect and report results"
+        echo ""
+        echo "test:matrix-smoke is a stub"
+
+  collect-results:
+    desc: "Collect test results from all test runs"
+    vars:
+      results_dir: '{{.results_dir | default (printf "%s/.score-task/test/results" .HOME)}}'
+    cmds:
+      - mkdir -p "{{.results_dir}}"
+      - |
+        echo "TODO: implement — collect JUnit/JSON test results from cluster"
+        echo "test:collect-results is a stub"
+
+  report:
+    desc: "Generate a test report from collected results"
+    vars:
+      results_dir: '{{.results_dir | default (printf "%s/.score-task/test/results" .HOME)}}'
+      report_file: '{{.report_file | default (printf "%s/.score-task/test/report.html" .HOME)}}'
+    cmds:
+      - |
+        echo "TODO: implement — generate HTML/Markdown report from {{.results_dir}}"
+        echo "test:report is a stub"
+
+  test-matrix:
+    desc: "Run the full test matrix end-to-end and produce a report"
+    cmds:
+      - task: matrix-smoke
+      - task: collect-results
+      - task: report

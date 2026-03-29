@@ -1,0 +1,97 @@
+version: "3"
+
+tasks:
+  status:
+    desc: "Show overall platform status across all namespaces"
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "=== Kubernetes Nodes ==="
+        kubectl get nodes -o wide 2>/dev/null || echo "(kubectl unavailable — is K3s running?)"
+
+      - |
+        echo ""
+        echo "=== All Pods (all namespaces) ==="
+        kubectl get pods -A 2>/dev/null || echo "(kubectl unavailable)"
+
+      - |
+        echo ""
+        echo "=== Problem Pods (CrashLoopBackOff / Pending / Error) ==="
+        PROBLEMS=$(kubectl get pods -A --no-headers 2>/dev/null | \
+          grep -E "CrashLoopBackOff|Pending|Error|OOMKilled|ImagePullBackOff|ErrImagePull" || true)
+        if [ -z "$PROBLEMS" ]; then
+          echo "(none — all pods look healthy)"
+        else
+          echo "$PROBLEMS"
+        fi
+
+      - |
+        echo ""
+        echo "=== Lima VMs ==="
+        limactl list 2>/dev/null || echo "(limactl unavailable)"
+
+  logs:
+    desc: "Stream logs from a pod (usage: task dev:logs -- -n nexus -l app=nxrm-ha)"
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          kubectl logs {{.CLI_ARGS}}
+        else
+          echo "Usage: task dev:logs -- [-n <namespace>] [-l <selector>] [<pod-name>]"
+          echo ""
+          echo "Examples:"
+          echo "  task dev:logs -- -n nexus -l app=nxrm-ha --tail=100 -f"
+          echo "  task dev:logs -- -n buildbarn -l app=bb-scheduler"
+          echo "  task dev:logs -- -n postgres -l app.kubernetes.io/name=postgresql"
+        fi
+
+  forward-nexus:
+    desc: "Port-forward Nexus UI to localhost:8081 and Docker registry to localhost:<NEXUS_DOCKER_PORT>"
+    vars:
+      namespace: '{{.namespace | default "nexus"}}'
+      local_port: '{{.local_port | default "8081"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Starting port-forward for Nexus UI on localhost:{{.local_port}}..."
+        echo "Press Ctrl-C to stop."
+        kubectl port-forward \
+          -n "{{.namespace}}" \
+          svc/nexus-sonatype-nexus-service \
+          {{.local_port}}:8081
+
+  forward-bb:
+    desc: "Port-forward Buildbarn scheduler gRPC to localhost:8980"
+    vars:
+      namespace: '{{.namespace | default "buildbarn"}}'
+      local_port: '{{.local_port | default "8980"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Starting port-forward for Buildbarn scheduler on localhost:{{.local_port}}..."
+        echo "Press Ctrl-C to stop."
+        kubectl port-forward \
+          -n "{{.namespace}}" \
+          svc/bb-scheduler \
+          {{.local_port}}:8980
+
+  forward-postgres:
+    desc: "Port-forward PostgreSQL to localhost:5432"
+    vars:
+      namespace: '{{.namespace | default "postgres"}}'
+      local_port: '{{.local_port | default "5432"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Starting port-forward for PostgreSQL on localhost:{{.local_port}}..."
+        echo "Press Ctrl-C to stop."
+        kubectl port-forward \
+          -n "{{.namespace}}" \
+          svc/postgres-postgresql \
+          {{.local_port}}:5432

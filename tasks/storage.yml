@@ -1,0 +1,62 @@
+version: "3"
+
+tasks:
+  setup:
+    desc: "Create platform namespaces and verify PVC provisioner"
+    vars:
+      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Creating namespaces: {{.namespaces}}"
+        for ns in {{.namespaces}}; do
+          kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+        done
+      - task: verify
+
+  verify:
+    desc: "Verify local-path-provisioner (K3s default) is available"
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Checking for storage classes..."
+        kubectl get storageclass
+        echo ""
+        echo "Checking local-path-provisioner pod..."
+        kubectl get pods -n kube-system -l app=local-path-provisioner || \
+          echo "TODO: implement — local-path-provisioner status check"
+
+  test:
+    desc: "Deploy a test PVC in each namespace and verify it binds"
+    vars:
+      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+      test_timeout: '{{.test_timeout | default "60s"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "TODO: implement — deploy test PVC in each namespace and verify binding"
+        FAILED=0
+        for ns in {{.namespaces}}; do
+          echo "Testing PVC binding in namespace: $ns"
+          # TODO: create test PVC, wait for bound, then delete
+          echo "  [SKIP] $ns — not yet implemented"
+        done
+        echo ""
+        echo "storage:test is a stub — implement PVC binding tests"
+
+  teardown:
+    desc: "Delete platform namespaces"
+    vars:
+      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Deleting namespaces: {{.namespaces}}"
+        for ns in {{.namespaces}}; do
+          kubectl delete namespace "$ns" --ignore-not-found=true
+        done
+        echo "Namespaces deleted."

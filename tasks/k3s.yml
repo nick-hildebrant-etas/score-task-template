@@ -1,0 +1,179 @@
+version: "3"
+
+tasks:
+  install:
+    desc: "Install K3s via Lima on Apple Silicon (creates Lima VM if absent)"
+    vars:
+      vm_name: '{{.vm_name | default "k3s"}}'
+      kubeconfig: '{{.kubeconfig | default (printf "%s/.kube/config" .HOME)}}'
+      kube_dir: '{{.kube_dir | default (printf "%s/.kube" .HOME)}}'
+      wait_timeout: '{{.wait_timeout | default "300s"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: command -v limactl >/dev/null 2>&1
+        msg: "limactl is not installed. Run: brew install lima"
+    cmds:
+      - |
+        if limactl list --format '{{`{{.Name}}`}}' 2>/dev/null | grep -q "^{{.vm_name}}$"; then
+          STATUS=$(limactl list --format '{{`{{.Name}} {{.Status}}`}}' 2>/dev/null | grep "^{{.vm_name}} " | awk '{print $2}')
+          echo "Lima VM '{{.vm_name}}' already exists (status: ${STATUS})"
+          if [ "$STATUS" != "Running" ]; then
+            echo "Starting Lima VM '{{.vm_name}}'..."
+            limactl start "{{.vm_name}}"
+          fi
+        else
+          echo "Creating Lima VM '{{.vm_name}}' using k3s template..."
+          limactl start --name="{{.vm_name}}" template://k3s
+        fi
+      - task: kubeconfig
+        vars:
+          vm_name: "{{.vm_name}}"
+          kubeconfig: "{{.kubeconfig}}"
+          kube_dir: "{{.kube_dir}}"
+      - |
+        echo "Waiting for K3s node to become Ready (timeout: {{.wait_timeout}})..."
+        kubectl wait --for=condition=Ready node --all --timeout="{{.wait_timeout}}"
+        echo "K3s is ready."
+        kubectl get nodes -o wide
+
+  kubeconfig:
+    desc: "Copy kubeconfig from Lima VM and patch server address to 127.0.0.1:6443"
+    vars:
+      vm_name: '{{.vm_name | default "k3s"}}'
+      kubeconfig: '{{.kubeconfig | default (printf "%s/.kube/config" .HOME)}}'
+      kube_dir: '{{.kube_dir | default (printf "%s/.kube" .HOME)}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    preconditions:
+      - sh: command -v limactl >/dev/null 2>&1
+        msg: "limactl is not installed. Run: brew install lima"
+    cmds:
+      - mkdir -p "{{.kube_dir}}"
+      - |
+        echo "Copying kubeconfig from Lima VM '{{.vm_name}}'..."
+        limactl copy "{{.vm_name}}:/etc/rancher/k3s/k3s.yaml" "{{.kubeconfig}}"
+        chmod 600 "{{.kubeconfig}}"
+      - |
+        echo "Patching server address to 127.0.0.1:6443..."
+        # Lima port-forwards the K3s API server to 127.0.0.1:6443
+        # Replace whatever server address k3s wrote with the localhost forwarded port
+        CURRENT_SERVER=$(yq '.clusters[0].cluster.server' "{{.kubeconfig}}")
+        echo "  Original server: ${CURRENT_SERVER}"
+        yq -i '.clusters[0].cluster.server = "https://127.0.0.1:6443"' "{{.kubeconfig}}"
+        echo "  Patched server:  https://127.0.0.1:6443"
+      - |
+        echo "Verifying connectivity..."
+        kubectl cluster-info
+        echo "kubeconfig ready at {{.kubeconfig}}"
+
+  status:
+    desc: "Show K3s / Lima VM status"
+    vars:
+      vm_name: '{{.vm_name | default "k3s"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "=== Lima VMs ==="
+        limactl list
+      - |
+        echo ""
+        echo "=== Kubernetes Nodes ==="
+        kubectl get nodes -o wide || echo "(kubectl unavailable — is the VM running?)"
+      - |
+        echo ""
+        echo "=== Kubernetes Version ==="
+        kubectl version --short 2>/dev/null || kubectl version 2>/dev/null || echo "(kubectl unavailable)"
+
+  uninstall:
+    desc: "Stop and delete the K3s Lima VM"
+    vars:
+      vm_name: '{{.vm_name | default "k3s"}}'
+    cmds:
+      - |
+        if limactl list --format '{{`{{.Name}}`}}' 2>/dev/null | grep -q "^{{.vm_name}}$"; then
+          STATUS=$(limactl list --format '{{`{{.Name}} {{.Status}}`}}' 2>/dev/null | grep "^{{.vm_name}} " | awk '{print $2}')
+          if [ "$STATUS" = "Running" ]; then
+            echo "Stopping Lima VM '{{.vm_name}}'..."
+            limactl stop "{{.vm_name}}"
+          fi
+          echo "Deleting Lima VM '{{.vm_name}}'..."
+          limactl delete "{{.vm_name}}"
+          echo "Lima VM '{{.vm_name}}' deleted."
+        else
+          echo "Lima VM '{{.vm_name}}' not found — nothing to uninstall."
+        fi
+
+  test:
+    desc: "Acceptance test: assert 1 Ready arm64 node, API responds < 5s"
+    vars:
+      vm_name: '{{.vm_name | default "k3s"}}'
+      api_timeout: '{{.api_timeout | default "5"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        FAILED=0
+
+        echo "=== K3s acceptance tests ==="
+        echo ""
+
+        # Test 1: API server responds within timeout
+        echo "[T1] API server responds within {{.api_timeout}}s..."
+        START=$(date +%s)
+        if kubectl cluster-info >/dev/null 2>&1; then
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          if [ "$ELAPSED" -le "{{.api_timeout}}" ]; then
+            echo "[PASS] API responded in ${ELAPSED}s"
+          else
+            echo "[FAIL] API responded in ${ELAPSED}s (expected <= {{.api_timeout}}s)"
+            FAILED=1
+          fi
+        else
+          echo "[FAIL] API server did not respond"
+          FAILED=1
+        fi
+
+        # Test 2: Exactly 1 Ready node
+        echo ""
+        echo "[T2] Exactly 1 Ready node..."
+        READY_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready" || echo "0")
+        if [ "$READY_COUNT" -eq 1 ]; then
+          echo "[PASS] 1 Ready node found"
+        else
+          echo "[FAIL] Expected 1 Ready node, found ${READY_COUNT}"
+          FAILED=1
+        fi
+
+        # Test 3: Node has kubernetes.io/arch=arm64
+        echo ""
+        echo "[T3] Node arch label is arm64..."
+        ARCH=$(kubectl get nodes -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}' 2>/dev/null)
+        if [ "$ARCH" = "arm64" ]; then
+          echo "[PASS] Node arch label is arm64"
+        else
+          echo "[FAIL] Expected arch=arm64, got: '${ARCH}'"
+          FAILED=1
+        fi
+
+        # Test 4: K3s system pods are running
+        echo ""
+        echo "[T4] K3s system pods are running..."
+        NOT_RUNNING=$(kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -v "Running\|Completed" | wc -l | tr -d ' ')
+        if [ "$NOT_RUNNING" -eq 0 ]; then
+          echo "[PASS] All kube-system pods are Running or Completed"
+        else
+          echo "[FAIL] ${NOT_RUNNING} kube-system pod(s) are not Running/Completed:"
+          kubectl get pods -n kube-system --no-headers | grep -v "Running\|Completed" || true
+          FAILED=1
+        fi
+
+        echo ""
+        if [ "$FAILED" -eq 0 ]; then
+          echo "All K3s tests passed."
+        else
+          echo "Some K3s tests failed."
+          exit 1
+        fi
