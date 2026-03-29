@@ -16,11 +16,11 @@ includes:
   storage:
     taskfile: "{{.HOME}}/.score-task/tasks/storage.yml"
     optional: true
-  postgres:
-    taskfile: "{{.HOME}}/.score-task/tasks/postgres.yml"
+  proxy:
+    taskfile: "{{.HOME}}/.score-task/tasks/proxy.yml"
     optional: true
-  nexus:
-    taskfile: "{{.HOME}}/.score-task/tasks/nexus.yml"
+  registry:
+    taskfile: "{{.HOME}}/.score-task/tasks/registry.yml"
     optional: true
   deps:
     taskfile: "{{.HOME}}/.score-task/tasks/deps.yml"
@@ -111,11 +111,11 @@ tasks:
       - task: tools:install-claude
       - task: k3s:install
       - task: storage:setup
-      - task: postgres:install
-      - task: postgres:wait
-      - task: nexus:install
-      - task: nexus:wait
-      - task: nexus:configure
+      - task: proxy:install
+      - task: proxy:wait
+      - task: registry:install
+      - task: registry:wait
+      - task: deps:collect
       - task: deps:seed
       - task: images:build-worker
       - task: images:push-worker
@@ -131,8 +131,8 @@ tasks:
     cmds:
       - task: actions:uninstall
       - task: buildbarn:uninstall
-      - task: nexus:uninstall
-      - task: postgres:uninstall
+      - task: registry:uninstall
+      - task: proxy:uninstall
       - task: storage:teardown
       - task: k3s:uninstall
 

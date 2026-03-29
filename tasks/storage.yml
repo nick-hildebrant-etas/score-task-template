@@ -4,7 +4,7 @@ tasks:
   setup:
     desc: "Create platform namespaces and verify PVC provisioner"
     vars:
-      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+      namespaces: '{{.namespaces | default "proxy registry buildbarn actions-runner"}}'
     env:
       KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:
@@ -31,7 +31,7 @@ tasks:
   test:
     desc: "Acceptance test: all 5 namespaces exist; PVC binds via local-path in each"
     vars:
-      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+      namespaces: '{{.namespaces | default "proxy registry buildbarn actions-runner"}}'
       test_timeout: '{{.test_timeout | default "60s"}}'
     env:
       KUBECONFIG: "{{.HOME}}/.kube/config"
@@ -41,7 +41,7 @@ tasks:
         echo "=== Storage acceptance tests ==="
         echo ""
 
-        # Test 1: All 5 namespaces exist
+        # Test 1: All 4 namespaces exist
         echo "[T1] All required namespaces exist..."
         for ns in {{.namespaces}}; do
           if kubectl get namespace "$ns" >/dev/null 2>&1; then
@@ -122,7 +122,7 @@ tasks:
   teardown:
     desc: "Delete platform namespaces"
     vars:
-      namespaces: '{{.namespaces | default "nexus postgres buildbarn actions-runner monitoring"}}'
+      namespaces: '{{.namespaces | default "proxy registry buildbarn actions-runner"}}'
     env:
       KUBECONFIG: "{{.HOME}}/.kube/config"
     cmds:

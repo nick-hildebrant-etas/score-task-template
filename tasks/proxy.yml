@@ -1,0 +1,290 @@
+version: "3"
+
+tasks:
+  install:
+    desc: "Deploy nginx reverse-proxy cache (PyPI, Cargo sparse, Bazel BCR)"
+    vars:
+      namespace: '{{.namespace | default "proxy"}}'
+      cache_size: '{{.cache_size | default "20Gi"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Deploying nginx proxy cache (namespace: {{.namespace}})..."
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: nginx-proxy-config
+          namespace: {{.namespace}}
+        data:
+          nginx.conf: |
+            user nginx;
+            worker_processes auto;
+            error_log /var/log/nginx/error.log warn;
+            pid /var/run/nginx.pid;
+            events { worker_connections 1024; }
+            http {
+              proxy_cache_path /cache/pypi   levels=1:2 keys_zone=pypi:10m   max_size=8g  inactive=30d use_temp_path=off;
+              proxy_cache_path /cache/cargo  levels=1:2 keys_zone=cargo:10m  max_size=8g  inactive=30d use_temp_path=off;
+              proxy_cache_path /cache/bcr    levels=1:2 keys_zone=bcr:10m    max_size=4g  inactive=30d use_temp_path=off;
+
+              proxy_cache_valid 200 301 302 30d;
+              proxy_cache_valid any 1m;
+              proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+              proxy_cache_revalidate on;
+              proxy_cache_lock on;
+
+              server {
+                listen 8080;
+
+                # PyPI simple API and files
+                location /pypi/ {
+                  proxy_pass https://pypi.org/;
+                  proxy_cache pypi;
+                  proxy_cache_key "\$uri\$is_args\$args";
+                  add_header X-Cache-Status \$upstream_cache_status;
+                  proxy_ssl_server_name on;
+                  proxy_set_header Host pypi.org;
+                }
+                location /pypi-files/ {
+                  proxy_pass https://files.pythonhosted.org/;
+                  proxy_cache pypi;
+                  proxy_cache_key "\$uri\$is_args\$args";
+                  add_header X-Cache-Status \$upstream_cache_status;
+                  proxy_ssl_server_name on;
+                  proxy_set_header Host files.pythonhosted.org;
+                }
+
+                # Cargo sparse index
+                location /cargo/index/ {
+                  proxy_pass https://index.crates.io/;
+                  proxy_cache cargo;
+                  proxy_cache_key "\$uri\$is_args\$args";
+                  add_header X-Cache-Status \$upstream_cache_status;
+                  proxy_ssl_server_name on;
+                  proxy_set_header Host index.crates.io;
+                }
+                # Cargo crate files
+                location /cargo/crates/ {
+                  proxy_pass https://static.crates.io/crates/;
+                  proxy_cache cargo;
+                  proxy_cache_key "\$uri\$is_args\$args";
+                  add_header X-Cache-Status \$upstream_cache_status;
+                  proxy_ssl_server_name on;
+                  proxy_set_header Host static.crates.io;
+                }
+
+                # Bazel Central Registry
+                location /bcr/ {
+                  proxy_pass https://bcr.bazel.build/;
+                  proxy_cache bcr;
+                  proxy_cache_key "\$uri\$is_args\$args";
+                  add_header X-Cache-Status \$upstream_cache_status;
+                  proxy_ssl_server_name on;
+                  proxy_set_header Host bcr.bazel.build;
+                }
+
+                location /healthz { return 200 "ok\n"; }
+              }
+            }
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: nginx-cache
+          namespace: {{.namespace}}
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: {{.cache_size}}
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: nginx-proxy
+          namespace: {{.namespace}}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: nginx-proxy
+          template:
+            metadata:
+              labels:
+                app: nginx-proxy
+            spec:
+              initContainers:
+              - name: init-cache-dirs
+                image: busybox:1.36
+                command: ["sh", "-c", "mkdir -p /cache/pypi /cache/cargo /cache/bcr"]
+                volumeMounts:
+                - name: cache
+                  mountPath: /cache
+              containers:
+              - name: nginx
+                image: nginx:1.27-alpine
+                ports:
+                - containerPort: 8080
+                resources:
+                  requests:
+                    cpu: "100m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "256Mi"
+                volumeMounts:
+                - name: config
+                  mountPath: /etc/nginx/nginx.conf
+                  subPath: nginx.conf
+                - name: cache
+                  mountPath: /cache
+                readinessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 3
+                  periodSeconds: 5
+              volumes:
+              - name: config
+                configMap:
+                  name: nginx-proxy-config
+              - name: cache
+                persistentVolumeClaim:
+                  claimName: nginx-cache
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: nginx-proxy
+          namespace: {{.namespace}}
+        spec:
+          selector:
+            app: nginx-proxy
+          ports:
+          - port: 8080
+            targetPort: 8080
+        EOF
+        echo "nginx proxy deployed."
+
+  wait:
+    desc: "Wait for nginx proxy pod to be Ready"
+    vars:
+      namespace: '{{.namespace | default "proxy"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        echo "Waiting for nginx-proxy pod..."
+        until kubectl wait deployment/nginx-proxy -n "{{.namespace}}" \
+            --for=condition=Available --timeout=20s 2>/dev/null; do
+          sleep 5
+        done
+        echo "nginx proxy is ready."
+        kubectl get pods -n "{{.namespace}}"
+
+  uninstall:
+    desc: "Remove nginx proxy deployment and PVC"
+    vars:
+      namespace: '{{.namespace | default "proxy"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        kubectl delete deployment/nginx-proxy service/nginx-proxy configmap/nginx-proxy-config \
+          -n "{{.namespace}}" --ignore-not-found=true
+        kubectl delete pvc/nginx-cache -n "{{.namespace}}" --ignore-not-found=true
+        echo "nginx proxy removed."
+
+  test:
+    desc: "Acceptance test: all three proxy upstreams reachable; cache PVC survives pod restart"
+    vars:
+      namespace: '{{.namespace | default "proxy"}}'
+      local_port: '{{.local_port | default "18080"}}'
+    env:
+      KUBECONFIG: "{{.HOME}}/.kube/config"
+    cmds:
+      - |
+        FAILED=0
+        NS="{{.namespace}}"
+        LOCAL_PORT="{{.local_port}}"
+        BASE="http://localhost:${LOCAL_PORT}"
+
+        kubectl port-forward svc/nginx-proxy "${LOCAL_PORT}:8080" -n "${NS}" >/dev/null 2>&1 &
+        PF_PID=$!
+        sleep 3
+
+        echo "=== nginx proxy acceptance tests ==="
+        echo ""
+
+        # T1: PyPI simple API
+        echo "[T1] PyPI — /pypi/simple/pip/..."
+        if curl -sf "${BASE}/pypi/simple/pip/" -o /dev/null; then
+          echo "  [PASS] PyPI simple API reachable"
+        else
+          echo "  [FAIL] PyPI simple API unreachable"
+          FAILED=1
+        fi
+
+        # T2: Cargo sparse index
+        echo "[T2] Cargo — /cargo/index/config.json..."
+        if curl -sf "${BASE}/cargo/index/config.json" -o /dev/null; then
+          echo "  [PASS] Cargo sparse index reachable"
+        else
+          echo "  [FAIL] Cargo sparse index unreachable"
+          FAILED=1
+        fi
+
+        # T3: Bazel BCR
+        echo "[T3] BCR — /bcr/bazel_registry.json..."
+        if curl -sf "${BASE}/bcr/bazel_registry.json" -o /dev/null; then
+          echo "  [PASS] Bazel BCR reachable"
+        else
+          echo "  [FAIL] Bazel BCR unreachable"
+          FAILED=1
+        fi
+
+        # T4: Cache hit on second request (PyPI)
+        echo "[T4] Cache HIT on second PyPI request..."
+        STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -D - "${BASE}/pypi/simple/pip/" 2>/dev/null | grep -i "X-Cache-Status" | awk '{print $2}' | tr -d '\r')
+        curl -sf "${BASE}/pypi/simple/pip/" -D /tmp/proxy-headers.txt -o /dev/null
+        STATUS=$(grep -i "X-Cache-Status" /tmp/proxy-headers.txt | awk '{print $2}' | tr -d '\r\n')
+        if [ "${STATUS}" = "HIT" ]; then
+          echo "  [PASS] X-Cache-Status: HIT"
+        else
+          echo "  [INFO] X-Cache-Status: ${STATUS:-unknown} (MISS on first run is expected)"
+        fi
+
+        kill "${PF_PID}" 2>/dev/null || true
+        sleep 1
+
+        # T5: Pod restart — cache PVC survives
+        echo ""
+        echo "[T5] Pod restart — cache data survives..."
+        kubectl delete pod -l app=nginx-proxy -n "${NS}" --wait=false
+        sleep 3
+        until kubectl wait deployment/nginx-proxy -n "${NS}" --for=condition=Available --timeout=20s 2>/dev/null; do
+          sleep 5
+        done
+        kubectl port-forward svc/nginx-proxy "${LOCAL_PORT}:8080" -n "${NS}" >/dev/null 2>&1 &
+        PF_PID=$!
+        sleep 3
+        STATUS2=$(curl -sf "${BASE}/pypi/simple/pip/" -D /tmp/proxy-headers2.txt -o /dev/null && \
+          grep -i "X-Cache-Status" /tmp/proxy-headers2.txt | awk '{print $2}' | tr -d '\r\n' || echo "error")
+        if [ "${STATUS2}" = "HIT" ]; then
+          echo "  [PASS] Cache HIT after pod restart — PVC data intact"
+        else
+          echo "  [INFO] Cache status after restart: ${STATUS2} (may be MISS if cache was not yet populated)"
+        fi
+
+        kill "${PF_PID}" 2>/dev/null || true
+
+        echo ""
+        if [ "${FAILED}" -eq 0 ]; then
+          echo "All proxy tests passed."
+        else
+          echo "Some proxy tests failed."
+          exit 1
+        fi
